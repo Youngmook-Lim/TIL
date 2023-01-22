@@ -14,9 +14,14 @@ public class JpaMain {
         tx.begin();
 
         try {
+//            Member member = new Member(200L, "member200");
+//            em.persist(member);
+//            em.flush();
 
             Member member = em.find(Member.class, 150L);
-            member.setName("ZZZZZ");
+            member.setName("AAAAA");
+
+            em.detach(member);
 
 //            Member member1 = new Member(150L, "A");
 //            Member member2 = new Member(160L, "B");
