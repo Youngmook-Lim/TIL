@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -25,6 +25,7 @@ import java.util.Random;
 import java.util.concurrent.TimeUnit;
 
 import org.h2.api.ErrorCode;
+import org.h2.engine.SysProperties;
 import org.h2.store.fs.FileUtils;
 import org.h2.test.TestBase;
 import org.h2.test.TestDb;
@@ -48,7 +49,7 @@ public class TestCsv extends TestDb {
     public static void main(String... a) throws Exception {
         TestBase test = TestBase.createCaller().init();
         test.config.traceTest = true;
-        test.testFromMain();
+        test.test();
     }
 
     @Override
@@ -106,7 +107,7 @@ public class TestCsv extends TestDb {
         csv.setLineSeparator(";");
         csv.write(writer, rs);
         conn.close();
-        assertEquals("TS,N;-0100-01-01 12:00:00,;", writer.toString());
+        assertEquals("TS,N;-100-01-01 12:00:00,;", writer.toString());
     }
 
     private void testCaseSensitiveColumnNames() throws Exception {
@@ -181,7 +182,7 @@ public class TestCsv extends TestDb {
     private void testOptions() {
         Csv csv = new Csv();
         assertEquals(",", csv.getFieldSeparatorWrite());
-        assertEquals(System.lineSeparator(), csv.getLineSeparator());
+        assertEquals(SysProperties.LINE_SEPARATOR, csv.getLineSeparator());
         assertEquals("", csv.getNullString());
         assertEquals('\"', csv.getEscapeCharacter());
         assertEquals('"', csv.getFieldDelimiter());
@@ -230,7 +231,9 @@ public class TestCsv extends TestDb {
         assertEquals("\0", csv.getNullString());
         assertEquals("", charset);
 
-        assertThrows(ErrorCode.FEATURE_NOT_SUPPORTED_1, () -> csv.setOptions("escape=a error=b"));
+        createClassProxy(Csv.class);
+        assertThrows(ErrorCode.FEATURE_NOT_SUPPORTED_1, csv).
+            setOptions("escape=a error=b");
         assertEquals('a', csv.getEscapeCharacter());
     }
 
@@ -487,7 +490,7 @@ public class TestCsv extends TestDb {
         assertTrue(rs.next());
         assertEquals("Hello", rs.getString(1));
         assertFalse(rs.next());
-        rs = stat.executeQuery("select * from csvread('" + getBaseDir() + "/test.csv')");
+        rs = stat.executeQuery("call csvread('" + getBaseDir() + "/test.csv')");
         assertTrue(rs.next());
         assertEquals(1, rs.getInt(1));
         assertEquals("Hello", rs.getString(2));
@@ -568,7 +571,7 @@ public class TestCsv extends TestDb {
         }
         trace("read: " + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - time));
         rs = new Csv().read(getBaseDir() + "/testRW.csv", null, "UTF8");
-        // stat.execute("CREATE ALIAS CSVREAD FOR 'org.h2.tools.Csv.read'");
+        // stat.execute("CREATE ALIAS CSVREAD FOR \"org.h2.tools.Csv.read\"");
         ResultSetMetaData meta = rs.getMetaData();
         assertEquals(2, meta.getColumnCount());
         for (int i = 0; i < len; i++) {

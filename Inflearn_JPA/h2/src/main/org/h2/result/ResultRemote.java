@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -8,7 +8,7 @@ package org.h2.result;
 import java.io.IOException;
 import java.util.ArrayList;
 
-import org.h2.api.ErrorCode;
+import org.h2.engine.SessionInterface;
 import org.h2.engine.SessionRemote;
 import org.h2.engine.SysProperties;
 import org.h2.message.DbException;
@@ -22,15 +22,16 @@ import org.h2.value.Value;
  * In many cases, the complete data is kept on the client side,
  * but for large results only a subset is in-memory.
  */
-public final class ResultRemote extends FetchedResult {
+public class ResultRemote implements ResultInterface {
 
     private int fetchSize;
     private SessionRemote session;
     private Transfer transfer;
     private int id;
     private final ResultColumn[] columns;
-    private long rowCount;
-    private long rowOffset;
+    private Value[] currentRow;
+    private final int rowCount;
+    private int rowId, rowOffset;
     private ArrayList<Value[]> result;
     private final Trace trace;
 
@@ -41,32 +42,19 @@ public final class ResultRemote extends FetchedResult {
         this.transfer = transfer;
         this.id = id;
         this.columns = new ResultColumn[columnCount];
-        rowCount = transfer.readRowCount();
+        rowCount = transfer.readInt();
         for (int i = 0; i < columnCount; i++) {
             columns[i] = new ResultColumn(transfer);
         }
         rowId = -1;
+        result = new ArrayList<>(Math.min(fetchSize, rowCount));
         this.fetchSize = fetchSize;
-        if (rowCount >= 0) {
-            fetchSize = (int) Math.min(rowCount, fetchSize);
-            result = new ArrayList<>(fetchSize);
-        } else {
-            result = new ArrayList<>();
-        }
-        synchronized (session) {
-            try {
-                if (fetchRows(fetchSize)) {
-                    rowCount = result.size();
-                }
-            } catch (IOException e) {
-                throw DbException.convertIOException(e, null);
-            }
-        }
+        fetchRows(false);
     }
 
     @Override
     public boolean isLazy() {
-        return rowCount < 0L;
+        return false;
     }
 
     @Override
@@ -95,8 +83,8 @@ public final class ResultRemote extends FetchedResult {
     }
 
     @Override
-    public boolean isIdentity(int i) {
-        return columns[i].identity;
+    public boolean isAutoIncrement(int i) {
+        return columns[i].autoIncrement;
     }
 
     @Override
@@ -106,13 +94,8 @@ public final class ResultRemote extends FetchedResult {
 
     @Override
     public void reset() {
-        if (rowCount < 0L || rowOffset > 0L) {
-            throw DbException.get(ErrorCode.RESULT_SET_NOT_SCROLLABLE);
-        }
         rowId = -1;
         currentRow = null;
-        nextRow = null;
-        afterLast = false;
         if (session == null) {
             return;
         }
@@ -128,37 +111,50 @@ public final class ResultRemote extends FetchedResult {
     }
 
     @Override
+    public Value[] currentRow() {
+        return currentRow;
+    }
+
+    @Override
+    public boolean next() {
+        if (rowId < rowCount) {
+            rowId++;
+            remapIfOld();
+            if (rowId < rowCount) {
+                if (rowId - rowOffset >= result.size()) {
+                    fetchRows(true);
+                }
+                currentRow = result.get(rowId - rowOffset);
+                return true;
+            }
+            currentRow = null;
+        }
+        return false;
+    }
+
+    @Override
+    public int getRowId() {
+        return rowId;
+    }
+
+    @Override
+    public boolean isAfterLast() {
+        return rowId >= rowCount;
+    }
+
+    @Override
     public int getVisibleColumnCount() {
         return columns.length;
     }
 
     @Override
-    public long getRowCount() {
-        if (rowCount < 0L) {
-            throw DbException.getUnsupportedException("Row count is unknown for lazy result.");
-        }
+    public int getRowCount() {
         return rowCount;
     }
 
     @Override
     public boolean hasNext() {
-        if (afterLast) {
-            return false;
-        }
-        if (nextRow == null) {
-            if (rowCount < 0L || rowId < rowCount - 1) {
-                long nextRowId = rowId + 1;
-                if (session != null) {
-                    remapIfOld();
-                    if (nextRowId - rowOffset >= result.size()) {
-                        fetchAdditionalRows();
-                    }
-                }
-                int index = (int) (nextRowId - rowOffset);
-                nextRow = index < result.size() ? result.get(index) : null;
-            }
-        }
-        return nextRow != null;
+        return rowId < rowCount - 1;
     }
 
     private void sendClose() {
@@ -186,6 +182,9 @@ public final class ResultRemote extends FetchedResult {
     }
 
     private void remapIfOld() {
+        if (session == null) {
+            return;
+        }
         try {
             if (id <= session.getCurrentId() - SysProperties.SERVER_CACHED_OBJECTS / 2) {
                 // object is too old - we need to map it to a new id
@@ -202,58 +201,44 @@ public final class ResultRemote extends FetchedResult {
         }
     }
 
-    private void fetchAdditionalRows() {
+    private void fetchRows(boolean sendFetch) {
         synchronized (session) {
             session.checkClosed();
             try {
                 rowOffset += result.size();
                 result.clear();
-                int fetch = fetchSize;
-                if (rowCount >= 0) {
-                    fetch = (int) Math.min(fetch, rowCount - rowOffset);
-                } else if (fetch == Integer.MAX_VALUE) {
-                    fetch = SysProperties.SERVER_RESULT_SET_FETCH_SIZE;
+                int fetch = Math.min(fetchSize, rowCount - rowOffset);
+                if (sendFetch) {
+                    session.traceOperation("RESULT_FETCH_ROWS", id);
+                    transfer.writeInt(SessionRemote.RESULT_FETCH_ROWS).
+                            writeInt(id).writeInt(fetch);
+                    session.done(transfer);
                 }
-                session.traceOperation("RESULT_FETCH_ROWS", id);
-                transfer.writeInt(SessionRemote.RESULT_FETCH_ROWS).writeInt(id).writeInt(fetch);
-                session.done(transfer);
-                fetchRows(fetch);
+                for (int r = 0; r < fetch; r++) {
+                    boolean row = transfer.readBoolean();
+                    if (!row) {
+                        break;
+                    }
+                    int len = columns.length;
+                    Value[] values = new Value[len];
+                    for (int i = 0; i < len; i++) {
+                        Value v = transfer.readValue();
+                        values[i] = v;
+                    }
+                    result.add(values);
+                }
+                if (rowOffset + result.size() >= rowCount) {
+                    sendClose();
+                }
             } catch (IOException e) {
                 throw DbException.convertIOException(e, null);
             }
         }
     }
 
-    private boolean fetchRows(int fetch) throws IOException {
-        int len = columns.length;
-        for (int r = 0; r < fetch; r++) {
-            switch (transfer.readByte()) {
-            case 1: {
-                Value[] values = new Value[len];
-                for (int i = 0; i < len; i++) {
-                    values[i] = transfer.readValue(columns[i].columnType);
-                }
-                result.add(values);
-                break;
-            }
-            case 0:
-                sendClose();
-                return true;
-            case -1:
-                throw SessionRemote.readException(transfer);
-            default:
-                throw DbException.getInternalError();
-            }
-        }
-        if (rowCount >= 0L && rowOffset + result.size() >= rowCount) {
-            sendClose();
-        }
-        return false;
-    }
-
     @Override
     public String toString() {
-        return "columns: " + columns.length + (rowCount < 0L ? " lazy" : " rows: " + rowCount) + " pos: " + rowId;
+        return "columns: " + columns.length + " rows: " + rowCount + " pos: " + rowId;
     }
 
     @Override
@@ -264,6 +249,17 @@ public final class ResultRemote extends FetchedResult {
     @Override
     public void setFetchSize(int fetchSize) {
         this.fetchSize = fetchSize;
+    }
+
+    @Override
+    public boolean needToClose() {
+        return true;
+    }
+
+    @Override
+    public ResultInterface createShallowCopy(SessionInterface targetSession) {
+        // The operation is not supported on remote result.
+        return null;
     }
 
     @Override

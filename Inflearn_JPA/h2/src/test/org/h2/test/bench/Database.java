@@ -1,15 +1,11 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.test.bench;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.io.PrintWriter;
-import java.lang.management.GarbageCollectorMXBean;
-import java.lang.management.ManagementFactory;
 import java.lang.reflect.Method;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -27,6 +23,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.h2.test.TestBase;
 import org.h2.tools.Server;
 import org.h2.util.StringUtils;
+import org.h2.util.Utils;
 
 /**
  * Represents a database in the benchmark test application.
@@ -46,10 +43,11 @@ class Database {
     private Statement stat;
     private long lastTrace;
     private final Random random = new Random(1);
-    private ArrayList<Measurement> results = new ArrayList<>();
+    private final ArrayList<Object[]> results = new ArrayList<>();
     private int totalTime;
     private int totalGCTime;
     private final AtomicInteger executedStatements = new AtomicInteger();
+    private int threadCount;
 
     private Server serverH2;
     private Object serverDerby;
@@ -87,18 +85,8 @@ class Database {
      *
      * @return the result array
      */
-    ArrayList<Measurement> getResults() {
+    ArrayList<Object[]> getResults() {
         return results;
-    }
-
-    ArrayList<Measurement> reset() {
-        executedStatements.set(0);
-        totalTime = 0;
-        totalGCTime = 0;
-        lastTrace = 0;
-        ArrayList<Measurement> measurements = results;
-        results = new ArrayList<>();
-        return measurements;
     }
 
     /**
@@ -115,11 +103,7 @@ class Database {
      */
     void startServer() throws Exception {
         if (url.startsWith("jdbc:h2:tcp:")) {
-            try {
-                serverH2 = Server.createTcpServer("-ifNotExists").start();
-            } catch (SQLException e) {
-                serverH2 = Server.createTcpServer().start();
-            }
+            serverH2 = Server.createTcpServer().start();
             Thread.sleep(100);
         } else if (url.startsWith("jdbc:derby://")) {
             serverDerby = Class.forName(
@@ -139,9 +123,9 @@ class Database {
                 }
                 Method m = c.getMethod("main", String[].class);
                 m.invoke(null, new Object[] { new String[] { "-database.0",
-                        "data/mydb;hsqldb.default_table_type=cached;hsqldb.write_delay_millis=1000",
-                        "-dbname.0", "xdb" } });
-                // org.hsqldb.Server.main(new String[]{"-database.0", "mydb", "-dbname.0", "xdb"});
+                        "data/mydb;hsqldb.default_table_type=cached", "-dbname.0", "xdb" } });
+                // org.hsqldb.Server.main(new String[]{"-database.0", "mydb",
+                // "-dbname.0", "xdb"});
                 serverHSQLDB = true;
                 Thread.sleep(100);
             }
@@ -177,28 +161,29 @@ class Database {
      * @param test the test application
      * @param id the database id
      * @param dbString the configuration string
-     * @param properties to use
+     * @param threadCount the number of threads to use
      * @return a new database object with the given settings
      */
-    static Database parse(DatabaseTest test, int id, String dbString, Properties properties) {
+    static Database parse(DatabaseTest test, int id, String dbString,
+            int threadCount) {
         try {
             StringTokenizer tokenizer = new StringTokenizer(dbString, ",");
             Database db = new Database();
             db.id = id;
+            db.threadCount = threadCount;
             db.test = test;
             db.name = tokenizer.nextToken().trim();
             String driver = tokenizer.nextToken().trim();
             Class.forName(driver);
             db.url = tokenizer.nextToken().trim();
             db.user = tokenizer.nextToken().trim();
-            db.password = null;
+            db.password = "";
             if (tokenizer.hasMoreTokens()) {
                 db.password = tokenizer.nextToken().trim();
             }
-            db.setTranslations(properties);
             return db;
         } catch (Exception e) {
-            System.out.println("Cannot load database " + dbString + ": " + e);
+            System.out.println("Cannot load database " + dbString + " :" + e.toString());
             return null;
         }
     }
@@ -225,20 +210,6 @@ class Database {
             // HSQLDB: use a WRITE_DELAY of 1 second
             try (Statement s = newConn.createStatement()) {
                 s.execute("SET WRITE_DELAY 1");
-            }
-        } else if (url.startsWith("jdbc:sqlite:")) {
-            try (Statement s = newConn.createStatement()) {
-
-                // Since 2010, SQLite has a Write-Ahead Logging mode which is widely cited as the key to getting good
-                // performance from SQLite. This option replaces the rollback journaling mode. Additional
-                // files are created as part of this mode. https://sqlite.org/wal.html
-                s.execute("PRAGMA journal_mode=WAL;");
-
-                // In WAL mode, NORMAL is safe from corruption and is consistent, but mayNot be durable in the event of
-                // a power loss. From the SQLite docs, "A transaction committed in WAL mode with synchronous=NORMAL
-                // might roll back following a power loss or system crash." This is in line with H2's commit delay.
-                // https://sqlite.org/pragma.html#pragma_synchronous
-                s.execute("PRAGMA synchronous=NORMAL;");
             }
         }
         return newConn;
@@ -313,7 +284,7 @@ class Database {
     void start(Bench bench, String action) {
         this.currentAction = bench.getName() + ": " + action;
         this.startTimeNs = System.nanoTime();
-        this.initialGCTime = getGarbageCollectionTime();
+        this.initialGCTime = Utils.getGarbageCollectionTime();
     }
 
     /**
@@ -322,23 +293,12 @@ class Database {
      */
     void end() {
         long time = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startTimeNs);
-        long gcCollectionTime = getGarbageCollectionTime() - initialGCTime;
+        long gcCollectionTime = Utils.getGarbageCollectionTime() - initialGCTime;
         log(currentAction, "ms", (int) time);
         if (test.isCollect()) {
             totalTime += time;
             totalGCTime += gcCollectionTime;
         }
-    }
-
-    public static long getGarbageCollectionTime() {
-        long totalGCTime = 0;
-        for (GarbageCollectorMXBean gcMXBean : ManagementFactory.getGarbageCollectorMXBeans()) {
-            long collectionTime = gcMXBean.getCollectionTime();
-            if(collectionTime > 0) {
-                totalGCTime += collectionTime;
-            }
-        }
-        return totalGCTime;
     }
 
     /**
@@ -442,12 +402,12 @@ class Database {
      * If data collection is enabled, add this information to the log.
      *
      * @param action the action
-     * @param unit of the value
+     * @param scale the scale
      * @param value the value
      */
-    void log(String action, String unit, int value) {
+    void log(String action, String scale, int value) {
         if (test.isCollect()) {
-            results.add(new Measurement(action, unit, value));
+            results.add(new Object[] { action, scale, Integer.valueOf(value) });
         }
     }
 
@@ -476,13 +436,12 @@ class Database {
      * @param prep the prepared statement
      */
     void queryReadResult(PreparedStatement prep) throws SQLException {
-        try (ResultSet rs = query(prep)) {
-            ResultSetMetaData meta = rs.getMetaData();
-            int columnCount = meta.getColumnCount();
-            while (rs.next()) {
-                for (int i = 0; i < columnCount; i++) {
-                    rs.getString(i + 1);
-                }
+        ResultSet rs = query(prep);
+        ResultSetMetaData meta = rs.getMetaData();
+        int columnCount = meta.getColumnCount();
+        while (rs.next()) {
+            for (int i = 0; i < columnCount; i++) {
+                rs.getString(i + 1);
             }
         }
     }
@@ -505,6 +464,10 @@ class Database {
         return id;
     }
 
+    int getThreadsCount() {
+        return threadCount;
+    }
+
     /**
      * The interface used for a test.
      */
@@ -524,30 +487,6 @@ class Database {
          */
         void trace(String msg);
 
-        /**
-         * Load testing properties
-         * @return Properties
-         * @throws IOException on failure
-         */
-        default Properties loadProperties() throws IOException {
-            Properties prop = new Properties();
-            try (InputStream in = getClass().getResourceAsStream("test.properties")) {
-                prop.load(in);
-            }
-            return prop;
-        }
     }
 
-    public static final class Measurement
-    {
-        final String name;
-        final String unit;
-        final int value;
-
-        public Measurement(String name, String unit, int value) {
-            this.name = name;
-            this.unit = unit;
-            this.value = value;
-        }
-    }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -78,7 +78,7 @@ public class CacheLRU implements Cache {
             int cacheSize) {
         Map<Integer, CacheObject> secondLevel = null;
         if (cacheType.startsWith("SOFT_")) {
-            secondLevel = new SoftValuesHashMap<>();
+            secondLevel = new SoftHashMap<>();
             cacheType = cacheType.substring("SOFT_".length());
         }
         Cache cache;
@@ -111,7 +111,9 @@ public class CacheLRU implements Cache {
             int pos = rec.getPos();
             CacheObject old = find(pos);
             if (old != null) {
-                throw DbException.getInternalError("try to add a record twice at pos " + pos);
+                DbException
+                        .throwInternalError("try to add a record twice at pos " +
+                                pos);
             }
         }
         int index = rec.getPos() & mask;
@@ -130,7 +132,7 @@ public class CacheLRU implements Cache {
             put(rec);
         } else {
             if (old != rec) {
-                throw DbException.getInternalError("old!=record pos:" + pos + " old:" + old + " new:" + rec);
+                DbException.throwInternalError("old!=record pos:" + pos + " old:" + old + " new:" + rec);
             }
             if (!fifo) {
                 removeFromLinkedList(rec);
@@ -186,7 +188,7 @@ public class CacheLRU implements Cache {
                 }
             }
             if (check == head) {
-                throw DbException.getInternalError("try to remove head");
+                DbException.throwInternalError("try to remove head");
             }
             // we are not allowed to remove it if the log is not yet written
             // (because we need to log before writing the data)
@@ -226,7 +228,7 @@ public class CacheLRU implements Cache {
                 CacheObject rec = changed.get(i);
                 remove(rec.getPos());
                 if (rec.cacheNext != null) {
-                    throw DbException.getInternalError();
+                    throw DbException.throwInternalError();
                 }
             }
         }
@@ -234,7 +236,7 @@ public class CacheLRU implements Cache {
 
     private void addToFront(CacheObject rec) {
         if (rec == head) {
-            throw DbException.getInternalError("try to move head");
+            DbException.throwInternalError("try to move head");
         }
         rec.cacheNext = head;
         rec.cachePrevious = head.cachePrevious;
@@ -244,7 +246,7 @@ public class CacheLRU implements Cache {
 
     private void removeFromLinkedList(CacheObject rec) {
         if (rec == head) {
-            throw DbException.getInternalError("try to remove head");
+            DbException.throwInternalError("try to remove head");
         }
         rec.cachePrevious.cacheNext = rec.cacheNext;
         rec.cacheNext.cachePrevious = rec.cachePrevious;
@@ -281,7 +283,7 @@ public class CacheLRU implements Cache {
             rec.cacheChained = null;
             CacheObject o = find(pos);
             if (o != null) {
-                throw DbException.getInternalError("not removed: " + o);
+                DbException.throwInternalError("not removed: " + o);
             }
         }
         return true;

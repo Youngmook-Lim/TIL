@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -8,12 +8,14 @@ package org.h2.index;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import org.h2.engine.SessionLocal;
+import org.h2.engine.Session;
 import org.h2.message.DbException;
 import org.h2.result.Row;
 import org.h2.result.SearchRow;
+import org.h2.table.Column;
 import org.h2.table.TableLink;
-import org.h2.value.ValueToObjectConverter2;
+import org.h2.value.DataType;
+import org.h2.value.Value;
 
 /**
  * The cursor implementation for the linked index.
@@ -23,11 +25,11 @@ public class LinkedCursor implements Cursor {
     private final TableLink tableLink;
     private final PreparedStatement prep;
     private final String sql;
-    private final SessionLocal session;
+    private final Session session;
     private final ResultSet rs;
     private Row current;
 
-    LinkedCursor(TableLink tableLink, ResultSet rs, SessionLocal session,
+    LinkedCursor(TableLink tableLink, ResultSet rs, Session session,
             String sql, PreparedStatement prep) {
         this.session = session;
         this.tableLink = tableLink;
@@ -61,15 +63,16 @@ public class LinkedCursor implements Cursor {
         }
         current = tableLink.getTemplateRow();
         for (int i = 0; i < current.getColumnCount(); i++) {
-            current.setValue(i, ValueToObjectConverter2.readValue(session, rs, i + 1,
-                    tableLink.getColumn(i).getType().getValueType()));
+            Column col = tableLink.getColumn(i);
+            Value v = DataType.readValue(session, rs, i + 1, col.getType().getValueType());
+            current.setValue(i, v);
         }
         return true;
     }
 
     @Override
     public boolean previous() {
-        throw DbException.getInternalError(toString());
+        throw DbException.throwInternalError(toString());
     }
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -14,28 +14,27 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 import org.h2.api.ErrorCode;
 import org.h2.command.Prepared;
-import org.h2.command.query.AllColumnsForPlan;
+import org.h2.command.dml.AllColumnsForPlan;
 import org.h2.constraint.Constraint;
-import org.h2.constraint.Constraint.Type;
-import org.h2.engine.CastDataProvider;
 import org.h2.engine.Constants;
 import org.h2.engine.DbObject;
 import org.h2.engine.Right;
-import org.h2.engine.SessionLocal;
+import org.h2.engine.Session;
+import org.h2.engine.UndoLogRecord;
+import org.h2.expression.Expression;
 import org.h2.expression.ExpressionVisitor;
 import org.h2.index.Index;
 import org.h2.index.IndexType;
 import org.h2.message.DbException;
 import org.h2.message.Trace;
-import org.h2.result.DefaultRow;
-import org.h2.result.LocalResult;
 import org.h2.result.Row;
-import org.h2.result.RowFactory;
+import org.h2.result.RowList;
 import org.h2.result.SearchRow;
+import org.h2.result.SimpleRow;
 import org.h2.result.SimpleRowValue;
 import org.h2.result.SortOrder;
 import org.h2.schema.Schema;
-import org.h2.schema.SchemaObject;
+import org.h2.schema.SchemaObjectBase;
 import org.h2.schema.Sequence;
 import org.h2.schema.TriggerObject;
 import org.h2.util.Utils;
@@ -47,7 +46,7 @@ import org.h2.value.ValueNull;
  * This is the base class for most tables.
  * A table contains a list of columns and a list of rows.
  */
-public abstract class Table extends SchemaObject {
+public abstract class Table extends SchemaObjectBase {
 
     /**
      * The table type that means this table is a regular persistent table.
@@ -58,21 +57,6 @@ public abstract class Table extends SchemaObject {
      * The table type that means this table is a regular persistent table.
      */
     public static final int TYPE_MEMORY = 1;
-
-    /**
-     * Read lock.
-     */
-    public static final int READ_LOCK = 0;
-
-    /**
-     * Write lock.
-     */
-    public static final int WRITE_LOCK = 1;
-
-    /**
-     * Exclusive lock.
-     */
-    public static final int EXCLUSIVE_LOCK = 2;
 
     /**
      * The columns of this table.
@@ -105,7 +89,6 @@ public abstract class Table extends SchemaObject {
     private boolean checkForeignKeyConstraints = true;
     private boolean onCommitDrop, onCommitTruncate;
     private volatile Row nullRow;
-    private RowFactory rowFactory = RowFactory.getRowFactory();
     private boolean tableExpression;
 
     protected Table(Schema schema, int id, String name, boolean persistIndexes, boolean persistData) {
@@ -135,28 +118,26 @@ public abstract class Table extends SchemaObject {
      * This method waits until the lock is granted.
      *
      * @param session the session
-     * @param lockType the type of lock
+     * @param exclusive true for write locks, false for read locks
+     * @param forceLockEvenInMvcc lock even in the MVCC mode
      * @return true if the table was already exclusively locked by this session.
      * @throws DbException if a lock timeout occurred
      */
-    public boolean lock(SessionLocal session, int lockType) {
-        return false;
-    }
+    public abstract boolean lock(Session session, boolean exclusive, boolean forceLockEvenInMvcc);
 
     /**
      * Close the table object and flush changes.
      *
      * @param session the session
      */
-    public abstract void close(SessionLocal session);
+    public abstract void close(Session session);
 
     /**
      * Release the lock for this session.
      *
      * @param s the session
      */
-    public void unlock(SessionLocal s) {
-    }
+    public abstract void unlock(Session s);
 
     /**
      * Create an index for this table
@@ -165,14 +146,14 @@ public abstract class Table extends SchemaObject {
      * @param indexName the name of the index
      * @param indexId the id
      * @param cols the index columns
-     * @param uniqueColumnCount the count of unique columns
      * @param indexType the index type
      * @param create whether this is a new index
      * @param indexComment the comment
      * @return the index
      */
-    public abstract Index addIndex(SessionLocal session, String indexName, int indexId, IndexColumn[] cols,
-            int uniqueColumnCount, IndexType indexType, boolean create, String indexComment);
+    public abstract Index addIndex(Session session, String indexName,
+            int indexId, IndexColumn[] cols, IndexType indexType,
+            boolean create, String indexComment);
 
     /**
      * Get the given row.
@@ -182,17 +163,8 @@ public abstract class Table extends SchemaObject {
      * @return the row
      */
     @SuppressWarnings("unused")
-    public Row getRow(SessionLocal session, long key) {
+    public Row getRow(Session session, long key) {
         return null;
-    }
-
-    /**
-     * Returns whether this table is insertable.
-     *
-     * @return whether this table is insertable
-     */
-    public boolean isInsertable() {
-        return true;
     }
 
     /**
@@ -201,7 +173,7 @@ public abstract class Table extends SchemaObject {
      * @param session the session
      * @param row the row
      */
-    public abstract void removeRow(SessionLocal session, Row row);
+    public abstract void removeRow(Session session, Row row);
 
     /**
      * Locks row, preventing any updated to it, except from the session specified.
@@ -210,7 +182,7 @@ public abstract class Table extends SchemaObject {
      * @param row to lock
      * @return locked row, or null if row does not exist anymore
      */
-    public Row lockRow(SessionLocal session, Row row) {
+    public Row lockRow(Session session, Row row) {
         throw DbException.getUnsupportedException("lockRow()");
     }
 
@@ -218,9 +190,8 @@ public abstract class Table extends SchemaObject {
      * Remove all rows from the table and indexes.
      *
      * @param session the session
-     * @return number of removed rows, possibly including uncommitted rows
      */
-    public abstract long truncate(SessionLocal session);
+    public abstract void truncate(Session session);
 
     /**
      * Add a row to the table and all indexes.
@@ -229,7 +200,7 @@ public abstract class Table extends SchemaObject {
      * @param row the row
      * @throws DbException if a constraint was violated
      */
-    public abstract void addRow(SessionLocal session, Row row);
+    public abstract void addRow(Session session, Row row);
 
     /**
      * Update a row to the table and all indexes.
@@ -239,7 +210,7 @@ public abstract class Table extends SchemaObject {
      * @param newRow the row with updated values (_rowid_ suppose to be the same)
      * @throws DbException if a constraint was violated
      */
-    public void updateRow(SessionLocal session, Row oldRow, Row newRow) {
+    public void updateRow(Session session, Row oldRow, Row newRow) {
         newRow.setKey(oldRow.getKey());
         removeRow(session, oldRow);
         addRow(session, newRow);
@@ -260,27 +231,12 @@ public abstract class Table extends SchemaObject {
     public abstract TableType getTableType();
 
     /**
-     * Return SQL table type for INFORMATION_SCHEMA.
-     *
-     * @return SQL table type for INFORMATION_SCHEMA
-     */
-    public String getSQLTableType() {
-        if (isView()) {
-            return "VIEW";
-        }
-        if (isTemporary()) {
-            return isGlobalTemporary() ? "GLOBAL TEMPORARY" : "LOCAL TEMPORARY";
-        }
-        return "BASE TABLE";
-    }
-
-    /**
      * Get the scan index to iterate through all rows.
      *
      * @param session the session
      * @return the index
      */
-    public abstract Index getScanIndex(SessionLocal session);
+    public abstract Index getScanIndex(Session session);
 
     /**
      * Get the scan index for this table.
@@ -294,11 +250,18 @@ public abstract class Table extends SchemaObject {
      * @return the scan index
      */
     @SuppressWarnings("unused")
-    public Index getScanIndex(SessionLocal session, int[] masks,
+    public Index getScanIndex(Session session, int[] masks,
             TableFilter[] filters, int filter, SortOrder sortOrder,
             AllColumnsForPlan allColumnsSet) {
         return getScanIndex(session);
     }
+
+    /**
+     * Get any unique index for this table if one exists.
+     *
+     * @return a unique index
+     */
+    public abstract Index getUniqueIndex();
 
     /**
      * Get all indexes for this table.
@@ -330,9 +293,7 @@ public abstract class Table extends SchemaObject {
      *
      * @return true if it is.
      */
-    public boolean isLockedExclusively() {
-        return false;
-    }
+    public abstract boolean isLockedExclusively();
 
     /**
      * Get the last data modification id.
@@ -351,10 +312,9 @@ public abstract class Table extends SchemaObject {
     /**
      * Check if the row count can be retrieved quickly.
      *
-     * @param session the session
      * @return true if it can
      */
-    public abstract boolean canGetRowCount(SessionLocal session);
+    public abstract boolean canGetRowCount();
 
     /**
      * Check if this table can be referenced.
@@ -378,19 +338,16 @@ public abstract class Table extends SchemaObject {
      * @param session the session
      * @return the row count
      */
-    public abstract long getRowCount(SessionLocal session);
+    public abstract long getRowCount(Session session);
 
     /**
      * Get the approximated row count for this table.
      *
-     * @param session the session
      * @return the approximated row count
      */
-    public abstract long getRowCountApproximation(SessionLocal session);
+    public abstract long getRowCountApproximation();
 
-    public long getDiskSpaceUsed() {
-        return 0L;
-    }
+    public abstract long getDiskSpaceUsed();
 
     /**
      * Get the row id column if this table has one.
@@ -399,6 +356,11 @@ public abstract class Table extends SchemaObject {
      */
     public Column getRowIdColumn() {
         return null;
+    }
+
+    @Override
+    public String getCreateSQLForCopy(Table table, String quotedName) {
+        throw DbException.throwInternalError(toString());
     }
 
     /**
@@ -468,9 +430,6 @@ public abstract class Table extends SchemaObject {
     }
 
     protected void setColumns(Column[] columns) {
-        if (columns.length > Constants.MAX_COLUMNS) {
-            throw DbException.get(ErrorCode.TOO_MANY_COLUMNS_1, "" + Constants.MAX_COLUMNS);
-        }
         this.columns = columns;
         if (columnMap.size() > 0) {
             columnMap.clear();
@@ -479,16 +438,16 @@ public abstract class Table extends SchemaObject {
             Column col = columns[i];
             int dataType = col.getType().getValueType();
             if (dataType == Value.UNKNOWN) {
-                throw DbException.get(ErrorCode.UNKNOWN_DATA_TYPE_1, col.getTraceSQL());
+                throw DbException.get(ErrorCode.UNKNOWN_DATA_TYPE_1, col.getSQL(false));
             }
             col.setTable(this, i);
             String columnName = col.getName();
-            if (columnMap.putIfAbsent(columnName, col) != null) {
-                throw DbException.get(ErrorCode.DUPLICATE_COLUMN_NAME_1, columnName);
+            if (columnMap.get(columnName) != null) {
+                throw DbException.get(
+                        ErrorCode.DUPLICATE_COLUMN_NAME_1, columnName);
             }
+            columnMap.put(columnName, col);
         }
-        rowFactory = database.getRowFactory().createRowFactory(database, database.getCompareMode(), database, columns,
-                null, false);
     }
 
     /**
@@ -519,7 +478,7 @@ public abstract class Table extends SchemaObject {
      * @return true if it is
      */
     @SuppressWarnings("unused")
-    public boolean isLockedExclusivelyBy(SessionLocal session) {
+    public boolean isLockedExclusivelyBy(Session session) {
         return false;
     }
 
@@ -531,16 +490,16 @@ public abstract class Table extends SchemaObject {
      * @param rows a list of row pairs of the form old row, new row, old row,
      *            new row,...
      */
-    public void updateRows(Prepared prepared, SessionLocal session, LocalResult rows) {
+    public void updateRows(Prepared prepared, Session session, RowList rows) {
         // in case we need to undo the update
-        SessionLocal.Savepoint rollback = session.setSavepoint();
+        Session.Savepoint rollback = session.setSavepoint();
         // remove the old rows
         int rowScanCount = 0;
-        while (rows.next()) {
+        for (rows.reset(); rows.hasNext();) {
             if ((++rowScanCount & 127) == 0) {
                 prepared.checkCanceled();
             }
-            Row o = rows.currentRowForTable();
+            Row o = rows.next();
             rows.next();
             try {
                 removeRow(session, o);
@@ -551,15 +510,15 @@ public abstract class Table extends SchemaObject {
                 }
                 throw e;
             }
+            session.log(this, UndoLogRecord.DELETE, o);
         }
         // add the new rows
-        rows.reset();
-        while (rows.next()) {
+        for (rows.reset(); rows.hasNext();) {
             if ((++rowScanCount & 127) == 0) {
                 prepared.checkCanceled();
             }
             rows.next();
-            Row n = rows.currentRowForTable();
+            Row n = rows.next();
             try {
                 addRow(session, n);
             } catch (DbException e) {
@@ -568,6 +527,7 @@ public abstract class Table extends SchemaObject {
                 }
                 throw e;
             }
+            session.log(this, UndoLogRecord.INSERT, n);
         }
     }
 
@@ -576,7 +536,7 @@ public abstract class Table extends SchemaObject {
     }
 
     @Override
-    public void removeChildrenAndResources(SessionLocal session) {
+    public void removeChildrenAndResources(Session session) {
         while (!dependentViews.isEmpty()) {
             TableView view = dependentViews.get(0);
             dependentViews.remove(0);
@@ -622,7 +582,7 @@ public abstract class Table extends SchemaObject {
      * @throws DbException if the column is referenced by multi-column
      *             constraints or indexes
      */
-    public void dropMultipleColumnsConstraintsAndIndexes(SessionLocal session,
+    public void dropMultipleColumnsConstraintsAndIndexes(Session session,
             ArrayList<Column> columnsToDrop) {
         HashSet<Constraint> constraintsToDrop = new HashSet<>();
         if (constraints != null) {
@@ -635,7 +595,7 @@ public abstract class Table extends SchemaObject {
                     if (columns.size() == 1) {
                         constraintsToDrop.add(constraint);
                     } else {
-                        throw DbException.get(ErrorCode.COLUMN_IS_REFERENCED_1, constraint.getTraceSQL());
+                        throw DbException.get(ErrorCode.COLUMN_IS_REFERENCED_1, constraint.getSQL(false));
                     }
                 }
             }
@@ -654,15 +614,13 @@ public abstract class Table extends SchemaObject {
                     if (index.getColumns().length == 1) {
                         indexesToDrop.add(index);
                     } else {
-                        throw DbException.get(ErrorCode.COLUMN_IS_REFERENCED_1, index.getTraceSQL());
+                        throw DbException.get(ErrorCode.COLUMN_IS_REFERENCED_1, index.getSQL(false));
                     }
                 }
             }
         }
         for (Constraint c : constraintsToDrop) {
-            if (c.isValid()) {
-                session.getDatabase().removeSchemaObject(session, c);
-            }
+            session.getDatabase().removeSchemaObject(session, c);
         }
         for (Index i : indexesToDrop) {
             // the index may already have been dropped when dropping the
@@ -673,23 +631,19 @@ public abstract class Table extends SchemaObject {
         }
     }
 
-    public RowFactory getRowFactory() {
-        return rowFactory;
-    }
-
     /**
-     * Create a new row for this table.
+     * Create a new row for a table.
      *
-     * @param data the values
-     * @param memory the estimated memory usage in bytes
-     * @return the created row
+     * @param data the values.
+     * @param memory whether the row is in memory.
+     * @return the created row.
      */
     public Row createRow(Value[] data, int memory) {
-        return rowFactory.createRow(data, memory);
+        return database.createRow(data, memory);
     }
 
     public Row getTemplateRow() {
-        return createRow(new Value[getColumns().length], DefaultRow.MEMORY_CALCULATE);
+        return createRow(new Value[columns.length], Row.MEMORY_CALCULATE);
     }
 
     /**
@@ -702,17 +656,17 @@ public abstract class Table extends SchemaObject {
         if (singleColumn) {
             return new SimpleRowValue(columns.length);
         }
-        return new DefaultRow(new Value[columns.length]);
+        return new SimpleRow(new Value[columns.length]);
     }
 
-    public Row getNullRow() {
+    Row getNullRow() {
         Row row = nullRow;
         if (row == null) {
             // Here can be concurrently produced more than one row, but it must
             // be ok.
             Value[] values = new Value[columns.length];
             Arrays.fill(values, ValueNull.INSTANCE);
-            nullRow = row = createRow(values, 1);
+            nullRow = row = database.createRow(values, 1);
         }
         return row;
     }
@@ -755,7 +709,7 @@ public abstract class Table extends SchemaObject {
      * Get the column with the given name.
      *
      * @param columnName the column name
-     * @param ifExists if {@code true} return {@code null} if column does not exist
+     * @param ifExists if (@code true) return {@code null} if column does not exist
      * @return the column
      * @throws DbException if the column was not found
      */
@@ -788,20 +742,6 @@ public abstract class Table extends SchemaObject {
     }
 
     /**
-     * Returns first identity column, or {@code null}.
-     *
-     * @return first identity column, or {@code null}
-     */
-    public Column getIdentityColumn() {
-        for (Column column : columns) {
-            if (column.isIdentity()) {
-                return column;
-            }
-        }
-        return null;
-    }
-
-    /**
      * Get the best plan for the given search mask.
      *
      * @param session the session
@@ -813,7 +753,7 @@ public abstract class Table extends SchemaObject {
      * @param allColumnsSet the set of all columns
      * @return the plan item
      */
-    public PlanItem getBestPlanItem(SessionLocal session, int[] masks,
+    public PlanItem getBestPlanItem(Session session, int[] masks,
             TableFilter[] filters, int filter, SortOrder sortOrder,
             AllColumnsForPlan allColumnsSet) {
         PlanItem item = new PlanItem();
@@ -885,97 +825,26 @@ public abstract class Table extends SchemaObject {
     }
 
     /**
-     * Prepares the specified row for INSERT operation.
-     *
-     * Identity, default, and generated values are evaluated, all values are
-     * converted to target data types and validated. Base value of identity
-     * column is updated when required by compatibility mode.
+     * Validate all values in this row, convert the values if required, and
+     * update the sequence values if required. This call will also set the
+     * default values if required and set the computed column if there are any.
      *
      * @param session the session
-     * @param overridingSystem
-     *            {@link Boolean#TRUE} for {@code OVERRIDING SYSTEM VALUES},
-     *            {@link Boolean#FALSE} for {@code OVERRIDING USER VALUES},
-     *            {@code null} if override clause is not specified
      * @param row the row
      */
-    public void convertInsertRow(SessionLocal session, Row row, Boolean overridingSystem) {
-        int length = columns.length, generated = 0;
-        for (int i = 0; i < length; i++) {
+    public void validateConvertUpdateSequence(Session session, Row row) {
+        for (int i = 0; i < columns.length; i++) {
             Value value = row.getValue(i);
             Column column = columns[i];
-            if (value == ValueNull.INSTANCE && column.isDefaultOnNull()) {
+            Value v2;
+            if (column.getComputed()) {
+                // force updating the value
                 value = null;
+                v2 = column.computeValue(session, row);
             }
-            if (column.isIdentity()) {
-                if (overridingSystem != null) {
-                    if (!overridingSystem) {
-                        value = null;
-                    }
-                } else if (value != null && column.isGeneratedAlways()) {
-                    throw DbException.get(ErrorCode.GENERATED_COLUMN_CANNOT_BE_ASSIGNED_1,
-                            column.getSQLWithTable(new StringBuilder(), TRACE_SQL_FLAGS).toString());
-                }
-            } else if (column.isGeneratedAlways()) {
-                if (value != null) {
-                    throw DbException.get(ErrorCode.GENERATED_COLUMN_CANNOT_BE_ASSIGNED_1,
-                            column.getSQLWithTable(new StringBuilder(), TRACE_SQL_FLAGS).toString());
-                }
-                generated++;
-                continue;
-            }
-            Value v2 = column.validateConvertUpdateSequence(session, value, row);
+            v2 = column.validateConvertUpdateSequence(session, value);
             if (v2 != value) {
                 row.setValue(i, v2);
-            }
-        }
-        if (generated > 0) {
-            for (int i = 0; i < length; i++) {
-                Value value = row.getValue(i);
-                if (value == null) {
-                    row.setValue(i, columns[i].validateConvertUpdateSequence(session, null, row));
-                }
-            }
-        }
-    }
-
-    /**
-     * Prepares the specified row for UPDATE operation.
-     *
-     * Default and generated values are evaluated, all values are converted to
-     * target data types and validated. Base value of identity column is updated
-     * when required by compatibility mode.
-     *
-     * @param session the session
-     * @param row the row
-     * @param fromTrigger {@code true} if row was modified by INSERT or UPDATE trigger
-     */
-    public void convertUpdateRow(SessionLocal session, Row row, boolean fromTrigger) {
-        int length = columns.length, generated = 0;
-        for (int i = 0; i < length; i++) {
-            Value value = row.getValue(i);
-            Column column = columns[i];
-            if (column.isGenerated()) {
-                if (value != null) {
-                    if (!fromTrigger) {
-                        throw DbException.get(ErrorCode.GENERATED_COLUMN_CANNOT_BE_ASSIGNED_1,
-                                column.getSQLWithTable(new StringBuilder(), TRACE_SQL_FLAGS).toString());
-                    }
-                    row.setValue(i, null);
-                }
-                generated++;
-                continue;
-            }
-            Value v2 = column.validateConvertUpdateSequence(session, value, row);
-            if (v2 != value) {
-                row.setValue(i, v2);
-            }
-        }
-        if (generated > 0) {
-            for (int i = 0; i < length; i++) {
-                Value value = row.getValue(i);
-                if (value == null) {
-                    row.setValue(i, columns[i].validateConvertUpdateSequence(session, null, row));
-                }
             }
         }
     }
@@ -1115,7 +984,7 @@ public abstract class Table extends SchemaObject {
      * @param type the trigger type
      * @param beforeAction whether 'before' triggers should be called
      */
-    public void fire(SessionLocal session, int type, boolean beforeAction) {
+    public void fire(Session session, int type, boolean beforeAction) {
         if (triggers != null) {
             for (TriggerObject trigger : triggers) {
                 trigger.fire(session, type, beforeAction);
@@ -1132,6 +1001,22 @@ public abstract class Table extends SchemaObject {
         if (triggers != null) {
             for (TriggerObject trigger : triggers) {
                 if (trigger.isSelectTrigger()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Check whether this table has a select trigger.
+     *
+     * @return true if it has
+     */
+    public boolean hasInsteadOfTrigger() {
+        if (triggers != null) {
+            for (TriggerObject trigger : triggers) {
+                if (trigger.isInsteadOf()) {
                     return true;
                 }
             }
@@ -1158,13 +1043,13 @@ public abstract class Table extends SchemaObject {
      * @param newRow the new data or null for a delete
      * @return true if no further action is required (for 'instead of' triggers)
      */
-    public boolean fireBeforeRow(SessionLocal session, Row oldRow, Row newRow) {
+    public boolean fireBeforeRow(Session session, Row oldRow, Row newRow) {
         boolean done = fireRow(session, oldRow, newRow, true, false);
         fireConstraints(session, oldRow, newRow, true);
         return done;
     }
 
-    private void fireConstraints(SessionLocal session, Row oldRow, Row newRow,
+    private void fireConstraints(Session session, Row oldRow, Row newRow,
             boolean before) {
         if (constraints != null) {
             for (Constraint constraint : constraints) {
@@ -1183,7 +1068,7 @@ public abstract class Table extends SchemaObject {
      *  @param newRow the new data or null for a delete
      *  @param rollback when the operation occurred within a rollback
      */
-    public void fireAfterRow(SessionLocal session, Row oldRow, Row newRow,
+    public void fireAfterRow(Session session, Row oldRow, Row newRow,
             boolean rollback) {
         fireRow(session, oldRow, newRow, false, rollback);
         if (!rollback) {
@@ -1191,7 +1076,7 @@ public abstract class Table extends SchemaObject {
         }
     }
 
-    private boolean fireRow(SessionLocal session, Row oldRow, Row newRow,
+    private boolean fireRow(Session session, Row oldRow, Row newRow,
             boolean beforeAction, boolean rollback) {
         if (triggers != null) {
             for (TriggerObject trigger : triggers) {
@@ -1225,13 +1110,12 @@ public abstract class Table extends SchemaObject {
      * @param checkExisting true if existing rows must be checked during this
      *            call
      */
-    public void setCheckForeignKeyConstraints(SessionLocal session, boolean enabled, boolean checkExisting) {
+    public void setCheckForeignKeyConstraints(Session session, boolean enabled,
+            boolean checkExisting) {
         if (enabled && checkExisting) {
             if (constraints != null) {
                 for (Constraint c : constraints) {
-                    if (c.getConstraintType() == Type.REFERENTIAL) {
-                        c.checkExistingData(session);
-                    }
+                    c.checkExistingData(session);
                 }
             }
         }
@@ -1253,7 +1137,7 @@ public abstract class Table extends SchemaObject {
      * @param needGetFirstOrLast if the returned index must be able
      *          to do {@link Index#canGetFirstOrLast()}
      * @param needFindNext if the returned index must be able to do
-     *          {@link Index#findNext(SessionLocal, SearchRow, SearchRow)}
+     *          {@link Index#findNext(Session, SearchRow, SearchRow)}
      * @return the index or null
      */
     public Index getIndexForColumn(Column column,
@@ -1304,7 +1188,7 @@ public abstract class Table extends SchemaObject {
      * @param session the session
      * @param index the index that is no longer required
      */
-    public void removeIndexOrTransferOwnership(SessionLocal session, Index index) {
+    public void removeIndexOrTransferOwnership(Session session, Index index) {
         boolean stillNeeded = false;
         if (constraints != null) {
             for (Constraint cons : constraints) {
@@ -1326,10 +1210,11 @@ public abstract class Table extends SchemaObject {
      *
      * @param session the session
      */
-    public void removeColumnExpressionsDependencies(SessionLocal session) {
+    public void removeColumnExpressionsDependencies(Session session) {
         for (Column column : columns) {
             column.setDefaultExpression(session, null);
             column.setOnUpdateExpression(session, null);
+            column.removeCheckConstraint();
         }
     }
 
@@ -1350,8 +1235,8 @@ public abstract class Table extends SchemaObject {
      *         null
      */
     @SuppressWarnings("unused")
-    public ArrayList<SessionLocal> checkDeadlock(SessionLocal session, SessionLocal clash,
-            Set<SessionLocal> visited) {
+    public ArrayList<Session> checkDeadlock(Session session, Session clash,
+            Set<Session> visited) {
         return null;
     }
 
@@ -1367,14 +1252,13 @@ public abstract class Table extends SchemaObject {
      * Compare two values with the current comparison mode. The values may be of
      * different type.
      *
-     * @param provider the cast information provider
      * @param a the first value
      * @param b the second value
      * @return 0 if both values are equal, -1 if the first value is smaller, and
      *         1 otherwise
      */
-    public int compareValues(CastDataProvider provider, Value a, Value b) {
-        return a.compareTo(b, provider, compareMode);
+    public int compareValues(Value a, Value b) {
+        return a.compareTo(b, database, compareMode);
     }
 
     public CompareMode getCompareMode() {
@@ -1390,6 +1274,38 @@ public abstract class Table extends SchemaObject {
         database.checkWritingAllowed();
     }
 
+    private static Value getGeneratedValue(Session session, Column column, Expression expression) {
+        Value v;
+        if (expression == null) {
+            v = column.validateConvertUpdateSequence(session, null);
+        } else {
+            v = expression.getValue(session);
+        }
+        return column.convert(v, false);
+    }
+
+    /**
+     * Get or generate a default value for the given column.
+     *
+     * @param session the session
+     * @param column the column
+     * @return the value
+     */
+    public Value getDefaultValue(Session session, Column column) {
+        return getGeneratedValue(session, column, column.getDefaultExpression());
+    }
+
+    /**
+     * Generates on update value for the given column.
+     *
+     * @param session the session
+     * @param column the column
+     * @return the value
+     */
+    public Value getOnUpdateValue(Session session, Column column) {
+        return getGeneratedValue(session, column, column.getOnUpdateExpression());
+    }
+
     @Override
     public boolean isHidden() {
         return isHidden;
@@ -1399,11 +1315,7 @@ public abstract class Table extends SchemaObject {
         this.isHidden = hidden;
     }
 
-    /**
-     * Views, function tables, links, etc. do not support locks
-     * @return true if table supports row-level locks
-     */
-    public boolean isRowLockable() {
+    public boolean isMVStore() {
         return false;
     }
 
@@ -1414,23 +1326,4 @@ public abstract class Table extends SchemaObject {
     public boolean isTableExpression() {
         return tableExpression;
     }
-
-    /**
-     * Return list of triggers.
-     *
-     * @return list of triggers
-     */
-    public ArrayList<TriggerObject> getTriggers() {
-        return triggers;
-    }
-
-    /**
-     * Returns ID of main index column, or {@link SearchRow#ROWID_INDEX}.
-     *
-     * @return ID of main index column, or {@link SearchRow#ROWID_INDEX}
-     */
-    public int getMainIndexColumn() {
-        return SearchRow.ROWID_INDEX;
-    }
-
 }

@@ -1,14 +1,15 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.test.unit;
 
 import java.util.Random;
+import org.h2.api.JavaObjectSerializer;
+import org.h2.pagestore.db.LobStorageBackend;
 import org.h2.store.DataHandler;
 import org.h2.store.FileStore;
-import org.h2.store.LobStorageInterface;
 import org.h2.store.fs.FileUtils;
 import org.h2.test.TestBase;
 import org.h2.util.SmallLRUCache;
@@ -26,7 +27,7 @@ public class TestFile extends TestBase implements DataHandler {
      * @param a ignored
      */
     public static void main(String... a) throws Exception {
-        TestBase.createCaller().init().testFromMain();
+        TestBase.createCaller().init().test();
     }
 
     @Override
@@ -151,6 +152,11 @@ public class TestFile extends TestBase implements DataHandler {
     }
 
     @Override
+    public String getLobCompressionAlgorithm(int type) {
+        return null;
+    }
+
+    @Override
     public Object getLobSyncObject() {
         return null;
     }
@@ -176,7 +182,7 @@ public class TestFile extends TestBase implements DataHandler {
     }
 
     @Override
-    public LobStorageInterface getLobStorage() {
+    public LobStorageBackend getLobStorage() {
         return null;
     }
 
@@ -184,6 +190,11 @@ public class TestFile extends TestBase implements DataHandler {
     public int readLob(long lobId, byte[] hmac, long offset, byte[] buff,
             int off, int length) {
         return -1;
+    }
+
+    @Override
+    public JavaObjectSerializer getJavaObjectSerializer() {
+        return null;
     }
 
     @Override

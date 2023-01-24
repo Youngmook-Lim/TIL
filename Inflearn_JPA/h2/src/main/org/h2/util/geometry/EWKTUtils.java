@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -24,8 +24,8 @@ import static org.h2.util.geometry.GeometryUtils.Z;
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 
-import org.h2.util.StringUtils;
 import org.h2.util.geometry.EWKBUtils.EWKBTarget;
+import org.h2.util.geometry.GeometryUtils.DimensionSystemTarget;
 import org.h2.util.geometry.GeometryUtils.Target;
 
 /**
@@ -255,7 +255,7 @@ public final class EWKTUtils {
                 while (ewkt.charAt(end - 1) <= ' ') {
                     end--;
                 }
-                srid = Integer.parseInt(StringUtils.trimSubstring(ewkt, offset, end));
+                srid = Integer.parseInt(ewkt.substring(offset, end).trim());
                 offset = idx + 1;
             } else {
                 srid = 0;
@@ -521,7 +521,11 @@ public final class EWKTUtils {
      * @return EWKT representation
      */
     public static String ewkb2ewkt(byte[] ewkb) {
-        return ewkb2ewkt(ewkb, EWKBUtils.getDimensionSystem(ewkb));
+        // Determine dimension system first
+        DimensionSystemTarget dimensionTarget = new DimensionSystemTarget();
+        EWKBUtils.parseEWKB(ewkb, dimensionTarget);
+        // Write an EWKT
+        return ewkb2ewkt(ewkb, dimensionTarget.getDimensionSystem());
     }
 
     /**
@@ -535,7 +539,8 @@ public final class EWKTUtils {
      */
     public static String ewkb2ewkt(byte[] ewkb, int dimensionSystem) {
         StringBuilder output = new StringBuilder();
-        EWKBUtils.parseEWKB(ewkb, new EWKTTarget(output, dimensionSystem));
+        EWKTTarget target = new EWKTTarget(output, dimensionSystem);
+        EWKBUtils.parseEWKB(ewkb, target);
         return output.toString();
     }
 
@@ -547,7 +552,11 @@ public final class EWKTUtils {
      * @return EWKB representation
      */
     public static byte[] ewkt2ewkb(String ewkt) {
-        return ewkt2ewkb(ewkt, getDimensionSystem(ewkt));
+        // Determine dimension system first
+        DimensionSystemTarget dimensionTarget = new DimensionSystemTarget();
+        parseEWKT(ewkt, dimensionTarget);
+        // Write an EWKB
+        return ewkt2ewkb(ewkt, dimensionTarget.getDimensionSystem());
     }
 
     /**
@@ -567,7 +576,7 @@ public final class EWKTUtils {
     }
 
     /**
-     * Parses a EWKT.
+     * Parses a EWKB.
      *
      * @param ewkt
      *            source EWKT
@@ -625,24 +634,22 @@ public final class EWKTUtils {
     /**
      * Formats type and dimension system as a string.
      *
-     * @param builder
-     *            string builder
      * @param type
      *            OGC geometry code format (type + dimensionSystem * 1000)
-     * @return the specified string builder
+     * @return formatted string
      * @throws IllegalArgumentException
      *             if type is not valid
      */
-    public static StringBuilder formatGeometryTypeAndDimensionSystem(StringBuilder builder, int type) {
+    public static String formatGeometryTypeAndDimensionSystem(int type) {
         int t = type % 1_000, d = type / 1_000;
         if (t < POINT || t > GEOMETRY_COLLECTION || d < DIMENSION_SYSTEM_XY || d > DIMENSION_SYSTEM_XYZM) {
             throw new IllegalArgumentException();
         }
-        builder.append(TYPES[t - 1]);
+        String result = TYPES[t - 1];
         if (d != DIMENSION_SYSTEM_XY) {
-            builder.append(' ').append(DIMENSION_SYSTEMS[d]);
+            result = result + ' ' + DIMENSION_SYSTEMS[d];
         }
-        return builder;
+        return result;
     }
 
     /**
@@ -855,31 +862,35 @@ public final class EWKTUtils {
     private static void addCoordinate(EWKTSource source, Target target, int dimensionSystem, int index, int total) {
         double x = source.readCoordinate();
         double y = source.readCoordinate();
-        double z = (dimensionSystem & DIMENSION_SYSTEM_XYZ) != 0 ? source.readCoordinate() : Double.NaN;
-        double m = (dimensionSystem & DIMENSION_SYSTEM_XYM) != 0 ? source.readCoordinate() : Double.NaN;
+        double z = Double.NaN, m = Double.NaN;
+        if (source.hasCoordinate()) {
+            if (dimensionSystem == DIMENSION_SYSTEM_XYM) {
+                m = source.readCoordinate();
+            } else {
+                z = source.readCoordinate();
+                if (source.hasCoordinate()) {
+                    m = source.readCoordinate();
+                }
+            }
+        }
         target.addCoordinate(x, y, z, m, index, total);
     }
 
     private static double[] readCoordinate(EWKTSource source, int dimensionSystem) {
         double x = source.readCoordinate();
         double y = source.readCoordinate();
-        double z = (dimensionSystem & DIMENSION_SYSTEM_XYZ) != 0 ? source.readCoordinate() : Double.NaN;
-        double m = (dimensionSystem & DIMENSION_SYSTEM_XYM) != 0 ? source.readCoordinate() : Double.NaN;
+        double z = Double.NaN, m = Double.NaN;
+        if (source.hasCoordinate()) {
+            if (dimensionSystem == DIMENSION_SYSTEM_XYM) {
+                m = source.readCoordinate();
+            } else {
+                z = source.readCoordinate();
+                if (source.hasCoordinate()) {
+                    m = source.readCoordinate();
+                }
+            }
+        }
         return new double[] { x, y, z, m };
-    }
-
-    /**
-     * Reads the dimension system from EWKT.
-     *
-     * @param ewkt
-     *            EWKT source
-     * @return the dimension system
-     */
-    public static int getDimensionSystem(String ewkt) {
-        EWKTSource source = new EWKTSource(ewkt);
-        source.readSRID();
-        source.readType();
-        return source.readDimensionSystem();
     }
 
     private EWKTUtils() {

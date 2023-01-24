@@ -1,18 +1,14 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.build.code;
 
+import java.io.File;
 import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileVisitResult;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.SimpleFileVisitor;
-import java.nio.file.attribute.BasicFileAttributes;
 
 /**
  * Enable / disable AB-BA deadlock detector code.
@@ -27,29 +23,31 @@ public class AbbaDetect {
      */
     public static void main(String... args) throws Exception {
         String baseDir = "src/main";
-        Files.walkFileTree(Paths.get(baseDir), new SimpleFileVisitor<Path>() {
-            @Override
-            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-                process(file, true);
-                return FileVisitResult.CONTINUE;
-            }
-        });
+        process(new File(baseDir), true);
     }
 
-    /**
-     * Process a file.
-     *
-     * @param file the file
-     */
-    static void process(Path file, boolean enable) throws IOException {
-        String name = file.getFileName().toString();
+    private static void process(File file, boolean enable) throws IOException {
+        String name = file.getName();
+        if (file.isDirectory()) {
+            if (name.equals("CVS") || name.equals(".svn")) {
+                return;
+            }
+            for (File f : file.listFiles()) {
+                process(f, enable);
+            }
+            return;
+        }
         if (!name.endsWith(".java")) {
             return;
         }
         if (name.endsWith("AbbaDetector.java")) {
             return;
         }
-        String source = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+        RandomAccessFile in = new RandomAccessFile(file, "r");
+        byte[] data = new byte[(int) file.length()];
+        in.readFully(data);
+        in.close();
+        String source = new String(data, StandardCharsets.UTF_8);
         String original = source;
 
         source = disable(source);
@@ -64,13 +62,15 @@ public class AbbaDetect {
         if (source.equals(original)) {
             return;
         }
-        Path newFile = Paths.get(file.toString() + ".new");
-        Files.write(newFile, source.getBytes(StandardCharsets.UTF_8));
+        File newFile = new File(file + ".new");
+        RandomAccessFile out = new RandomAccessFile(newFile, "rw");
+        out.write(source.getBytes(StandardCharsets.UTF_8));
+        out.close();
 
-        Path oldFile = Paths.get(file.toString() + ".old");
-        Files.move(file, oldFile);
-        Files.move(newFile, file);
-        Files.delete(oldFile);
+        File oldFile = new File(file + ".old");
+        file.renameTo(oldFile);
+        newFile.renameTo(file);
+        oldFile.delete();
     }
 
     private static String disable(String source) {

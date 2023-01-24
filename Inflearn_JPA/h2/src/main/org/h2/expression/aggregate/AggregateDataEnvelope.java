@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -7,7 +7,7 @@ package org.h2.expression.aggregate;
 
 import java.util.ArrayList;
 
-import org.h2.engine.SessionLocal;
+import org.h2.engine.Database;
 import org.h2.expression.Expression;
 import org.h2.expression.ExpressionColumn;
 import org.h2.index.Index;
@@ -22,7 +22,7 @@ import org.h2.value.ValueNull;
 /**
  * Data stored while calculating an aggregate.
  */
-final class AggregateDataEnvelope extends AggregateData {
+class AggregateDataEnvelope extends AggregateData {
 
     private double[] envelope;
 
@@ -57,15 +57,15 @@ final class AggregateDataEnvelope extends AggregateData {
     }
 
     @Override
-    void add(SessionLocal session, Value v) {
+    void add(Database database, Value v) {
         if (v == ValueNull.INSTANCE) {
             return;
         }
-        envelope = GeometryUtils.union(envelope, v.convertToGeometry(null).getEnvelopeNoCopy());
+        envelope = GeometryUtils.union(envelope, ((ValueGeometry) v.convertTo(Value.GEOMETRY)).getEnvelopeNoCopy());
     }
 
     @Override
-    Value getValue(SessionLocal session) {
+    Value getValue(Database database, int dataType) {
         return ValueGeometry.fromEnvelope(envelope);
     }
 

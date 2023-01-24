@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -86,11 +86,20 @@ public class FileLister {
     public static ArrayList<String> getDatabaseFiles(String dir, String db,
             boolean all) {
         ArrayList<String> files = new ArrayList<>();
-        String start = db == null ? null : db + '.';
-        for (FilePath path : FilePath.get(dir).newDirectoryStream()) {
+        // for Windows, File.getCanonicalPath("...b.") returns just "...b"
+        String start = db == null ? null : (FileUtils.toRealPath(dir + "/" + db) + ".");
+        for (String f : FileUtils.newDirectoryStream(dir)) {
             boolean ok = false;
-            String f = path.toString();
-            if (f.endsWith(Constants.SUFFIX_MV_FILE)) {
+            if (f.endsWith(Constants.SUFFIX_LOBS_DIRECTORY)) {
+                if (start == null || f.startsWith(start)) {
+                    files.addAll(getDatabaseFiles(f, null, all));
+                    ok = true;
+                }
+            } else if (f.endsWith(Constants.SUFFIX_LOB_FILE)) {
+                ok = true;
+            } else if (f.endsWith(Constants.SUFFIX_PAGE_FILE)) {
+                ok = true;
+            } else if (f.endsWith(Constants.SUFFIX_MV_FILE)) {
                 ok = true;
             } else if (all) {
                 if (f.endsWith(Constants.SUFFIX_LOCK_FILE)) {
@@ -102,7 +111,7 @@ public class FileLister {
                 }
             }
             if (ok) {
-                if (db == null || path.getName().startsWith(start)) {
+                if (db == null || f.startsWith(start)) {
                     files.add(f);
                 }
             }

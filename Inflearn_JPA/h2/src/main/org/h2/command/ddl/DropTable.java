@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -15,11 +15,12 @@ import org.h2.constraint.Constraint;
 import org.h2.constraint.ConstraintActionType;
 import org.h2.engine.Database;
 import org.h2.engine.Right;
-import org.h2.engine.SessionLocal;
+import org.h2.engine.Session;
 import org.h2.message.DbException;
 import org.h2.schema.Schema;
 import org.h2.table.Table;
 import org.h2.table.TableView;
+import org.h2.util.StringUtils;
 import org.h2.util.Utils;
 
 /**
@@ -33,7 +34,7 @@ public class DropTable extends DefineCommand {
 
     private final ArrayList<SchemaAndTable> tables = Utils.newSmallArrayList();
 
-    public DropTable(SessionLocal session) {
+    public DropTable(Session session) {
         super(session);
         dropAction = session.getDatabase().getSettings().dropRestrict ?
                 ConstraintActionType.RESTRICT :
@@ -64,7 +65,7 @@ public class DropTable extends DefineCommand {
                     throw DbException.get(ErrorCode.TABLE_OR_VIEW_NOT_FOUND_1, tableName);
                 }
             } else {
-                session.getUser().checkTableRight(table, Right.SCHEMA_OWNER);
+                session.getUser().checkRight(table, Right.ALL);
                 if (!table.canDrop()) {
                     throw DbException.get(ErrorCode.CANNOT_DROP_TABLE_1, tableName);
                 }
@@ -94,10 +95,11 @@ public class DropTable extends DefineCommand {
                     }
                 }
                 if (!dependencies.isEmpty()) {
-                    throw DbException.get(ErrorCode.CANNOT_DROP_2, table.getName(), String.join(", ", dependencies));
+                    throw DbException.get(ErrorCode.CANNOT_DROP_2, table.getName(),
+                            StringUtils.join(new StringBuilder(), dependencies, ", ").toString());
                 }
             }
-            table.lock(session, Table.EXCLUSIVE_LOCK);
+            table.lock(session, true, true);
         }
         return true;
     }
@@ -117,7 +119,8 @@ public class DropTable extends DefineCommand {
     }
 
     @Override
-    public long update() {
+    public int update() {
+        session.commit(true);
         if (prepareDrop()) {
             executeDrop();
         }

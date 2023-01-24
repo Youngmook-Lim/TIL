@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -12,6 +12,7 @@ import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.io.StringReader;
 import java.sql.Connection;
+import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
@@ -32,6 +33,7 @@ import org.h2.util.Utils;
 
 /**
  * Interactive command line tool to access a database using JDBC.
+ * @h2.resource
  */
 public class Shell extends Tool implements Runnable {
 
@@ -52,9 +54,8 @@ public class Shell extends Tool implements Runnable {
     private String serverPropertiesDir = Constants.SERVER_PROPERTIES_DIR;
 
     /**
-     * Options are case sensitive.
+     * Options are case sensitive. Supported options are:
      * <table>
-     * <caption>Supported options</caption>
      * <tr><td>[-help] or [-?]</td>
      * <td>Print the list of options</td></tr>
      * <tr><td>[-url "&lt;url&gt;"]</td>
@@ -72,9 +73,9 @@ public class Shell extends Tool implements Runnable {
      * </table>
      * If special characters don't work as expected, you may need to use
      * -Dfile.encoding=UTF-8 (Mac OS X) or CP850 (Windows).
+     * @h2.resource
      *
      * @param args the command line arguments
-     * @throws SQLException on failure
      */
     public static void main(String... args) throws SQLException {
         new Shell().runTool(args);
@@ -114,7 +115,6 @@ public class Shell extends Tool implements Runnable {
      */
     @Override
     public void runTool(String... args) throws SQLException {
-        String driver = null;
         String url = null;
         String user = "";
         String password = "";
@@ -128,7 +128,8 @@ public class Shell extends Tool implements Runnable {
             } else if (arg.equals("-password")) {
                 password = args[++i];
             } else if (arg.equals("-driver")) {
-                driver = args[++i];
+                String driver = args[++i];
+                JdbcUtils.loadUserClass(driver);
             } else if (arg.equals("-sql")) {
                 sql = args[++i];
             } else if (arg.equals("-properties")) {
@@ -143,7 +144,8 @@ public class Shell extends Tool implements Runnable {
             }
         }
         if (url != null) {
-            conn = JdbcUtils.getConnection(driver, url, user, password);
+            org.h2.Driver.load();
+            conn = DriverManager.getConnection(url, user, password);
             stat = conn.createStatement();
         }
         if (sql == null) {
@@ -174,7 +176,6 @@ public class Shell extends Tool implements Runnable {
      *
      * @param conn the connection
      * @param args the command line settings
-     * @throws SQLException on failure
      */
     public void runTool(Connection conn, String... args) throws SQLException {
         this.conn = conn;
@@ -363,31 +364,29 @@ public class Shell extends Tool implements Runnable {
         println("[Enter]   " + user);
         print("User      ");
         user = readLine(user);
-        conn = url.startsWith(Constants.START_URL) ? connectH2(driver, url, user)
-                : JdbcUtils.getConnection(driver, url, user, readPassword());
-        stat = conn.createStatement();
-        println("Connected");
-    }
-
-    private Connection connectH2(String driver, String url, String user) throws IOException, SQLException {
         for (;;) {
             String password = readPassword();
             try {
-                return JdbcUtils.getConnection(driver, url + ";IFEXISTS=TRUE", user, password);
+                conn = JdbcUtils.getConnection(driver, url + ";IFEXISTS=TRUE", user, password);
+                break;
             } catch (SQLException ex) {
                 if (ex.getErrorCode() == ErrorCode.DATABASE_NOT_FOUND_WITH_IF_EXISTS_1) {
                     println("Type the same password again to confirm database creation.");
                     String password2 = readPassword();
                     if (password.equals(password2)) {
-                        return JdbcUtils.getConnection(driver, url, user, password);
+                        conn = JdbcUtils.getConnection(driver, url, user, password);
+                        break;
                     } else {
                         println("Passwords don't match. Try again.");
+                        continue;
                     }
                 } else {
                     throw ex;
                 }
             }
         }
+        stat = conn.createStatement();
+        println("Connected");
     }
 
     /**
@@ -468,22 +467,14 @@ public class Shell extends Tool implements Runnable {
         try {
             ResultSet rs = null;
             try {
-                if (sql.startsWith("@")) {
-                    rs = JdbcUtils.getMetaResultSet(conn, sql);
-                    printResult(rs, listMode);
-                } else if (stat.execute(sql)) {
+                if (stat.execute(sql)) {
                     rs = stat.getResultSet();
                     int rowCount = printResult(rs, listMode);
                     time = System.nanoTime() - time;
                     println("(" + rowCount + (rowCount == 1 ?
                             " row, " : " rows, ") + TimeUnit.NANOSECONDS.toMillis(time) + " ms)");
                 } else {
-                    long updateCount;
-                    try {
-                        updateCount = stat.getLargeUpdateCount();
-                    } catch (UnsupportedOperationException e) {
-                        updateCount = stat.getUpdateCount();
-                    }
+                    int updateCount = stat.getUpdateCount();
                     time = System.nanoTime() - time;
                     println("(Update count: " + updateCount + ", " +
                             TimeUnit.NANOSECONDS.toMillis(time) + " ms)");
@@ -563,7 +554,7 @@ public class Shell extends Tool implements Runnable {
                 max = Math.max(max, row[i].length());
             }
             if (len > 1) {
-                max = Math.min(maxColumnSize, max);
+                Math.min(maxColumnSize, max);
             }
             columnSizes[i] = max;
         }

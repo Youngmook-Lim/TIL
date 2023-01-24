@@ -1,11 +1,12 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.value;
 
-import java.math.BigDecimal;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
 
 import org.h2.engine.CastDataProvider;
 import org.h2.util.StringUtils;
@@ -13,12 +14,12 @@ import org.h2.util.StringUtils;
 /**
  * Base implementation of the ENUM data type.
  *
- * This base implementation is only used in 2.0.* clients when they work with
- * 1.4.* servers.
+ * Currently, this class is used primarily for
+ * client-server communication.
  */
 public class ValueEnumBase extends Value {
 
-    final String label;
+    private final String label;
     private final int ordinal;
 
     protected ValueEnumBase(final String label, final int ordinal) {
@@ -27,9 +28,9 @@ public class ValueEnumBase extends Value {
     }
 
     @Override
-    public Value add(Value v) {
-        ValueInteger iv = v.convertToInt(null);
-        return convertToInt(null).add(iv);
+    public Value add(final Value v) {
+        final Value iv = v.convertTo(Value.INT);
+        return convertTo(Value.INT).add(iv);
     }
 
     @Override
@@ -38,9 +39,9 @@ public class ValueEnumBase extends Value {
     }
 
     @Override
-    public Value divide(Value v, TypeInfo quotientType) {
-        ValueInteger iv = v.convertToInt(null);
-        return convertToInt(null).divide(iv, quotientType);
+    public Value divide(final Value v) {
+        final Value iv = v.convertTo(Value.INT);
+        return convertTo(Value.INT).divide(iv);
     }
 
     @Override
@@ -56,7 +57,7 @@ public class ValueEnumBase extends Value {
      * @param ordinal the ordinal
      * @return the value
      */
-    public static ValueEnumBase get(String label, int ordinal) {
+    public static ValueEnumBase get(final String label, final int ordinal) {
         return new ValueEnumBase(label, ordinal);
     }
 
@@ -71,18 +72,8 @@ public class ValueEnumBase extends Value {
     }
 
     @Override
-    public BigDecimal getBigDecimal() {
-        return BigDecimal.valueOf(ordinal);
-    }
-
-    @Override
-    public float getFloat() {
-        return ordinal;
-    }
-
-    @Override
-    public double getDouble() {
-        return ordinal;
+    public Object getObject() {
+        return label;
     }
 
     @Override
@@ -91,7 +82,7 @@ public class ValueEnumBase extends Value {
     }
 
     @Override
-    public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
+    public StringBuilder getSQL(StringBuilder builder) {
         return StringUtils.quoteStringSQL(builder, label);
     }
 
@@ -124,21 +115,28 @@ public class ValueEnumBase extends Value {
     }
 
     @Override
-    public Value modulus(Value v) {
-        ValueInteger iv = v.convertToInt(null);
-        return convertToInt(null).modulus(iv);
+    public Value modulus(final Value v) {
+        final Value iv = v.convertTo(Value.INT);
+        return convertTo(Value.INT).modulus(iv);
     }
 
     @Override
-    public Value multiply(Value v) {
-        ValueInteger iv = v.convertToInt(null);
-        return convertToInt(null).multiply(iv);
+    public Value multiply(final Value v) {
+        final Value iv = v.convertTo(Value.INT);
+        return convertTo(Value.INT).multiply(iv);
+    }
+
+
+    @Override
+    public void set(final PreparedStatement prep, final int parameterIndex)
+            throws SQLException {
+            prep.setInt(parameterIndex, ordinal);
     }
 
     @Override
-    public Value subtract(Value v) {
-        ValueInteger iv = v.convertToInt(null);
-        return convertToInt(null).subtract(iv);
+    public Value subtract(final Value v) {
+        final Value iv = v.convertTo(Value.INT);
+        return convertTo(Value.INT).subtract(iv);
     }
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -11,6 +11,7 @@ import java.util.Comparator;
 import java.util.Locale;
 import java.util.Objects;
 
+import org.h2.engine.SysProperties;
 import org.h2.util.StringUtils;
 
 /**
@@ -43,7 +44,17 @@ public class CompareMode implements Comparator<Value> {
      */
     public static final String CHARSET = "CHARSET_";
 
-    private static Locale[] LOCALES;
+    /**
+     * This constant means that the BINARY or UUID columns are sorted as if the
+     * bytes were signed.
+     */
+    public static final String SIGNED = "SIGNED";
+
+    /**
+     * This constant means that the BINARY or UUID columns are sorted as if the
+     * bytes were unsigned.
+     */
+    public static final String UNSIGNED = "UNSIGNED";
 
     private static volatile CompareMode lastUsed;
 
@@ -63,9 +74,22 @@ public class CompareMode implements Comparator<Value> {
     private final String name;
     private final int strength;
 
-    protected CompareMode(String name, int strength) {
+    /**
+     * If true, sort BINARY columns as if they contain unsigned bytes.
+     */
+    private final boolean binaryUnsigned;
+
+    /**
+     * If true, sort UUID columns as if they contain unsigned bytes instead of
+     * Java-compatible sorting.
+     */
+    private final boolean uuidUnsigned;
+
+    protected CompareMode(String name, int strength, boolean binaryUnsigned, boolean uuidUnsigned) {
         this.name = name;
         this.strength = strength;
+        this.binaryUnsigned = binaryUnsigned;
+        this.uuidUnsigned = uuidUnsigned;
     }
 
     /**
@@ -79,12 +103,33 @@ public class CompareMode implements Comparator<Value> {
      * @return the compare mode
      */
     public static CompareMode getInstance(String name, int strength) {
+        return getInstance(name, strength, SysProperties.SORT_BINARY_UNSIGNED, SysProperties.SORT_UUID_UNSIGNED);
+    }
+
+    /**
+     * Create a new compare mode with the given collator and strength. If
+     * required, a new CompareMode is created, or if possible the last one is
+     * returned. A cache is used to speed up comparison when using a collator;
+     * CollationKey objects are cached.
+     *
+     * @param name the collation name or null
+     * @param strength the collation strength
+     * @param binaryUnsigned whether to compare binaries as unsigned
+     * @param uuidUnsigned whether to compare UUIDs as unsigned
+     * @return the compare mode
+     */
+    public static CompareMode getInstance(String name, int strength, boolean binaryUnsigned, boolean uuidUnsigned) {
         CompareMode last = lastUsed;
-        if (last != null && Objects.equals(last.name, name) && last.strength == strength) {
-            return last;
+        if (last != null) {
+            if (Objects.equals(last.name, name) &&
+                    last.strength == strength &&
+                    last.binaryUnsigned == binaryUnsigned &&
+                    last.uuidUnsigned == uuidUnsigned) {
+                return last;
+            }
         }
         if (name == null || name.equals(OFF)) {
-            last = new CompareMode(name, strength);
+            last = new CompareMode(name, strength, binaryUnsigned, uuidUnsigned);
         } else {
             boolean useICU4J;
             if (name.startsWith(ICU4J)) {
@@ -99,29 +144,13 @@ public class CompareMode implements Comparator<Value> {
                 useICU4J = CAN_USE_ICU4J;
             }
             if (useICU4J) {
-                last = new CompareModeIcu4J(name, strength);
+                last = new CompareModeIcu4J(name, strength, binaryUnsigned, uuidUnsigned);
             } else {
-                last = new CompareModeDefault(name, strength);
+                last = new CompareModeDefault(name, strength, binaryUnsigned, uuidUnsigned);
             }
         }
         lastUsed = last;
         return last;
-    }
-
-    /**
-     * Returns available locales for collations.
-     *
-     * @param onlyIfInitialized
-     *            if {@code true}, returns {@code null} when locales are not yet
-     *            initialized
-     * @return available locales for collations.
-     */
-    public static Locale[] getCollationLocales(boolean onlyIfInitialized) {
-        Locale[] locales = LOCALES;
-        if (locales == null && !onlyIfInitialized) {
-            LOCALES = locales = Collator.getAvailableLocales();
-        }
-        return locales;
     }
 
     /**
@@ -134,19 +163,15 @@ public class CompareMode implements Comparator<Value> {
      * @param ignoreCase true if a case-insensitive comparison should be made
      * @return true if the characters are equals
      */
-    public boolean equalsChars(String a, int ai, String b, int bi, boolean ignoreCase) {
+    public boolean equalsChars(String a, int ai, String b, int bi,
+            boolean ignoreCase) {
         char ca = a.charAt(ai);
         char cb = b.charAt(bi);
-        if (ca == cb) {
-            return true;
-        }
         if (ignoreCase) {
-            if (Character.toUpperCase(ca) == Character.toUpperCase(cb)
-                    || Character.toLowerCase(ca) == Character.toLowerCase(cb)) {
-                return true;
-            }
+            ca = Character.toUpperCase(ca);
+            cb = Character.toUpperCase(cb);
         }
-        return false;
+        return ca == cb;
     }
 
     /**
@@ -188,7 +213,7 @@ public class CompareMode implements Comparator<Value> {
      * @return true if they match
      */
     static boolean compareLocaleNames(Locale locale, String name) {
-        return name.equalsIgnoreCase(locale.toString()) || name.equalsIgnoreCase(locale.toLanguageTag()) ||
+        return name.equalsIgnoreCase(locale.toString()) ||
                 name.equalsIgnoreCase(getName(locale));
     }
 
@@ -225,14 +250,9 @@ public class CompareMode implements Comparator<Value> {
                     result = Collator.getInstance(locale);
                 }
             }
-        } else if (name.indexOf('-') > 0) {
-            Locale locale = Locale.forLanguageTag(name);
-            if (!locale.getLanguage().isEmpty()) {
-                return Collator.getInstance(locale);
-            }
         }
         if (result == null) {
-            for (Locale locale : getCollationLocales(false)) {
+            for (Locale locale : Collator.getAvailableLocales()) {
                 if (compareLocaleNames(locale, name)) {
                     result = Collator.getInstance(locale);
                     break;
@@ -250,6 +270,14 @@ public class CompareMode implements Comparator<Value> {
         return strength;
     }
 
+    public boolean isBinaryUnsigned() {
+        return binaryUnsigned;
+    }
+
+    public boolean isUuidUnsigned() {
+        return uuidUnsigned;
+    }
+
     @Override
     public boolean equals(Object obj) {
         if (obj == this) {
@@ -264,6 +292,12 @@ public class CompareMode implements Comparator<Value> {
         if (strength != o.strength) {
             return false;
         }
+        if (binaryUnsigned != o.binaryUnsigned) {
+            return false;
+        }
+        if (uuidUnsigned != o.uuidUnsigned) {
+            return false;
+        }
         return true;
     }
 
@@ -272,6 +306,8 @@ public class CompareMode implements Comparator<Value> {
         int result = 1;
         result = 31 * result + getName().hashCode();
         result = 31 * result + strength;
+        result = 31 * result + (binaryUnsigned ? 1231 : 1237);
+        result = 31 * result + (uuidUnsigned ? 1231 : 1237);
         return result;
     }
 

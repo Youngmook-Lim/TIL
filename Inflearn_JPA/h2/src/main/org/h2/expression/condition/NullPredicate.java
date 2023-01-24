@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -7,7 +7,7 @@ package org.h2.expression.condition;
 
 import java.util.ArrayList;
 
-import org.h2.engine.SessionLocal;
+import org.h2.engine.Session;
 import org.h2.expression.Expression;
 import org.h2.expression.ExpressionColumn;
 import org.h2.expression.ExpressionList;
@@ -22,26 +22,21 @@ import org.h2.value.ValueRow;
 /**
  * Null predicate (IS [NOT] NULL).
  */
-public final class NullPredicate extends SimplePredicate {
+public class NullPredicate extends SimplePredicate {
 
     private boolean optimized;
 
-    public NullPredicate(Expression left, boolean not, boolean whenOperand) {
-        super(left, not, whenOperand);
+    public NullPredicate(Expression left, boolean not) {
+        super(left, not);
     }
 
     @Override
-    public StringBuilder getUnenclosedSQL(StringBuilder builder, int sqlFlags) {
-        return getWhenSQL(left.getSQL(builder, sqlFlags, AUTO_PARENTHESES), sqlFlags);
+    public StringBuilder getSQL(StringBuilder builder, boolean alwaysQuote) {
+        return left.getSQL(builder.append('('), alwaysQuote).append(not ? " IS NOT NULL)" : " IS NULL)");
     }
 
     @Override
-    public StringBuilder getWhenSQL(StringBuilder builder, int sqlFlags) {
-        return builder.append(not ? " IS NOT NULL" : " IS NULL");
-    }
-
-    @Override
-    public Expression optimize(SessionLocal session) {
+    public Expression optimize(Session session) {
         if (optimized) {
             return this;
         }
@@ -50,13 +45,13 @@ public final class NullPredicate extends SimplePredicate {
             return o;
         }
         optimized = true;
-        if (!whenOperand && left instanceof ExpressionList) {
+        if (left instanceof ExpressionList) {
             ExpressionList list = (ExpressionList) left;
-            if (!list.isArray()) {
+            if (list.getType().getValueType() == Value.ROW) {
                 for (int i = 0, count = list.getSubexpressionCount(); i < count; i++) {
                     if (list.getSubexpression(i).isNullConstant()) {
                         if (not) {
-                            return ValueExpression.FALSE;
+                            return ValueExpression.getBoolean(false);
                         }
                         ArrayList<Expression> newList = new ArrayList<>(count - 1);
                         for (int j = 0; j < i; j++) {
@@ -79,35 +74,21 @@ public final class NullPredicate extends SimplePredicate {
     }
 
     @Override
-    public Value getValue(SessionLocal session) {
-        return ValueBoolean.get(getValue(left.getValue(session)));
-    }
-
-    @Override
-    public boolean getWhenValue(SessionLocal session, Value left) {
-        if (!whenOperand) {
-            return super.getWhenValue(session, left);
-        }
-        return getValue(left);
-    }
-
-    private boolean getValue(Value left) {
-        if (left.getType().getValueType() == Value.ROW) {
-            for (Value v : ((ValueRow) left).getList()) {
+    public Value getValue(Session session) {
+        Value l = left.getValue(session);
+        if (l.getType().getValueType() == Value.ROW) {
+            for (Value v : ((ValueRow) l).getList()) {
                 if (v != ValueNull.INSTANCE ^ not) {
-                    return false;
+                    return ValueBoolean.FALSE;
                 }
             }
-            return true;
+            return ValueBoolean.TRUE;
         }
-        return left == ValueNull.INSTANCE ^ not;
+        return ValueBoolean.get(l == ValueNull.INSTANCE ^ not);
     }
 
     @Override
-    public Expression getNotIfPossible(SessionLocal session) {
-        if (whenOperand) {
-            return null;
-        }
+    public Expression getNotIfPossible(Session session) {
         Expression o = optimize(session);
         if (o != this) {
             return o.getNotIfPossible(session);
@@ -117,19 +98,19 @@ public final class NullPredicate extends SimplePredicate {
         case Value.ROW:
             return null;
         }
-        return new NullPredicate(left, !not, false);
+        return new NullPredicate(left, !not);
     }
 
     @Override
-    public void createIndexConditions(SessionLocal session, TableFilter filter) {
-        if (not || whenOperand || !filter.getTable().isQueryComparable()) {
+    public void createIndexConditions(Session session, TableFilter filter) {
+        if (not || !filter.getTable().isQueryComparable()) {
             return;
         }
         if (left instanceof ExpressionColumn) {
             createNullIndexCondition(filter, (ExpressionColumn) left);
         } else if (left instanceof ExpressionList) {
             ExpressionList list = (ExpressionList) left;
-            if (!list.isArray()) {
+            if (list.getType().getValueType() == Value.ROW) {
                 for (int i = 0, count = list.getSubexpressionCount(); i < count; i++) {
                     Expression e = list.getSubexpression(i);
                     if (e instanceof ExpressionColumn) {
@@ -146,7 +127,7 @@ public final class NullPredicate extends SimplePredicate {
          * to be sure.
          */
         if (filter == c.getTableFilter() && c.getType().getValueType() != Value.ROW) {
-            filter.addIndexCondition(IndexCondition.get(Comparison.EQUAL_NULL_SAFE, c, ValueExpression.NULL));
+            filter.addIndexCondition(IndexCondition.get(Comparison.EQUAL_NULL_SAFE, c, ValueExpression.getNull()));
         }
     }
 

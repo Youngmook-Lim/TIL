@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -38,7 +38,6 @@ import javax.net.ssl.SSLSocketFactory;
 import org.h2.api.ErrorCode;
 import org.h2.engine.SysProperties;
 import org.h2.message.DbException;
-import org.h2.mvstore.DataUtils;
 import org.h2.store.fs.FileUtils;
 import org.h2.util.IOUtils;
 import org.h2.util.StringUtils;
@@ -104,10 +103,10 @@ public class CipherFactory {
      * @param address the address to connect to
      * @param port the port
      * @return the socket
-     * @throws IOException on failure
      */
     public static Socket createSocket(InetAddress address, int port)
             throws IOException {
+        Socket socket = null;
         setKeystore();
         SSLSocketFactory f = (SSLSocketFactory) SSLSocketFactory.getDefault();
         SSLSocket secureSocket = (SSLSocket) f.createSocket();
@@ -121,7 +120,8 @@ public class CipherFactory {
                     secureSocket.getSupportedCipherSuites());
             secureSocket.setEnabledCipherSuites(list);
         }
-        return secureSocket;
+        socket = secureSocket;
+        return socket;
     }
 
 /**
@@ -137,10 +137,10 @@ public class CipherFactory {
      * @param bindAddress the address to bind to, or null to bind to all
      *            addresses
      * @return the server socket
-     * @throws IOException on failure
      */
     public static ServerSocket createServerSocket(int port,
             InetAddress bindAddress) throws IOException {
+        ServerSocket socket = null;
         if (SysProperties.ENABLE_ANONYMOUS_TLS) {
             removeAnonFromLegacyAlgorithms();
         }
@@ -160,7 +160,9 @@ public class CipherFactory {
                     secureSocket.getSupportedCipherSuites());
             secureSocket.setEnabledCipherSuites(list);
         }
-        return secureSocket;
+
+        socket = secureSocket;
+        return socket;
     }
 
     /**
@@ -258,7 +260,7 @@ public class CipherFactory {
         try {
             store.store(bout, password.toCharArray());
         } catch (Exception e) {
-            throw DataUtils.convertToIOException(e);
+            throw DbException.convertToIOException(e);
         }
         return bout.toByteArray();
     }
@@ -268,7 +270,6 @@ public class CipherFactory {
      *
      * @param password the keystore password
      * @return the keystore
-     * @throws IOException on failure
      */
     public static KeyStore getKeyStore(String password) throws IOException {
         try {
@@ -276,7 +277,7 @@ public class CipherFactory {
             // if you have a keystore file.
             // This code is (hopefully) more Java version independent
             // than using keystores directly. See also:
-            // https://bugs.openjdk.java.net/browse/JDK-4887561
+            // http://bugs.sun.com/bugdatabase/view_bug.do?bug_id=4887561
             // (1.4.2 cannot read keystore written with 1.4.1)
             // --- generated code start ---
 
@@ -349,7 +350,7 @@ public class CipherFactory {
             // --- generated code end ---
             return store;
         } catch (Exception e) {
-            throw DataUtils.convertToIOException(e);
+            throw DbException.convertToIOException(e);
         }
     }
 
@@ -374,7 +375,7 @@ public class CipherFactory {
                     out.write(data);
                     out.close();
                 } catch (Exception e) {
-                    throw DataUtils.convertToIOException(e);
+                    throw DbException.convertToIOException(e);
                 }
             }
             String absolutePath = FileUtils.toRealPath(fileName);

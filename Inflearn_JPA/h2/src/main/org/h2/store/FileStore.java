@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -274,7 +274,8 @@ public class FileStore {
      */
     public void readFully(byte[] b, int off, int len) {
         if (len < 0 || len % Constants.FILE_BLOCK_SIZE != 0) {
-            throw DbException.getInternalError("unaligned read " + name + " len " + len);
+            DbException.throwInternalError(
+                    "unaligned read " + name + " len " + len);
         }
         checkPowerOff();
         try {
@@ -292,7 +293,8 @@ public class FileStore {
      */
     public void seek(long pos) {
         if (pos % Constants.FILE_BLOCK_SIZE != 0) {
-            throw DbException.getInternalError("unaligned seek " + name + " pos " + pos);
+            DbException.throwInternalError(
+                    "unaligned seek " + name + " pos " + pos);
         }
         try {
             if (pos != filePos) {
@@ -324,7 +326,8 @@ public class FileStore {
      */
     public void write(byte[] b, int off, int len) {
         if (len < 0 || len % Constants.FILE_BLOCK_SIZE != 0) {
-            throw DbException.getInternalError("unaligned write " + name + " len " + len);
+            DbException.throwInternalError(
+                    "unaligned write " + name + " len " + len);
         }
         checkWritingAllowed();
         checkPowerOff();
@@ -345,7 +348,8 @@ public class FileStore {
      */
     public void setLength(long newLength) {
         if (newLength % Constants.FILE_BLOCK_SIZE != 0) {
-            throw DbException.getInternalError("unaligned setLength " + name + " pos " + newLength);
+            DbException.throwInternalError(
+                    "unaligned setLength " + name + " pos " + newLength);
         }
         checkPowerOff();
         checkWritingAllowed();
@@ -376,14 +380,16 @@ public class FileStore {
             try {
                 len = file.size();
                 if (len != fileLength) {
-                    throw DbException.getInternalError("file " + name + " length " + len + " expected " + fileLength);
+                    DbException.throwInternalError(
+                            "file " + name + " length " + len + " expected " + fileLength);
                 }
                 if (len % Constants.FILE_BLOCK_SIZE != 0) {
                     long newLength = len + Constants.FILE_BLOCK_SIZE -
                             (len % Constants.FILE_BLOCK_SIZE);
                     file.truncate(newLength);
                     fileLength = newLength;
-                    throw DbException.getInternalError("unaligned file length " + name + " len " + len);
+                    DbException.throwInternalError(
+                            "unaligned file length " + name + " len " + len);
                 }
             } catch (IOException e) {
                 throw DbException.convertIOException(e, name);
@@ -401,7 +407,7 @@ public class FileStore {
         if (ASSERT) {
             try {
                 if (file.position() != filePos) {
-                    throw DbException.getInternalError(file.position() + " " + filePos);
+                    DbException.throwInternalError(file.position() + " " + filePos);
                 }
             } catch (IOException e) {
                 throw DbException.convertIOException(e, name);
@@ -442,7 +448,6 @@ public class FileStore {
 
     /**
      * Close the file. The file may later be re-opened using openFile.
-     * @throws IOException on failure
      */
     public void closeFile() throws IOException {
         file.close();
@@ -465,7 +470,6 @@ public class FileStore {
     /**
      * Re-open the file. The file pointer will be reset to the previous
      * location.
-     * @throws IOException on failure
      */
     public void openFile() throws IOException {
         if (file == null) {

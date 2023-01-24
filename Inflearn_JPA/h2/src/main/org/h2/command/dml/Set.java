@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -9,31 +9,28 @@ import java.text.Collator;
 
 import org.h2.api.ErrorCode;
 import org.h2.command.CommandInterface;
-import org.h2.command.Parser;
 import org.h2.command.Prepared;
+import org.h2.compress.Compressor;
 import org.h2.engine.Constants;
 import org.h2.engine.Database;
 import org.h2.engine.Mode;
-import org.h2.engine.SessionLocal;
+import org.h2.engine.Session;
 import org.h2.engine.Setting;
 import org.h2.expression.Expression;
-import org.h2.expression.TimeZoneOperation;
 import org.h2.expression.ValueExpression;
 import org.h2.message.DbException;
 import org.h2.message.Trace;
-import org.h2.mode.DefaultNullOrdering;
+import org.h2.result.LocalResultFactory;
 import org.h2.result.ResultInterface;
+import org.h2.result.RowFactory;
 import org.h2.schema.Schema;
 import org.h2.security.auth.AuthenticatorFactory;
 import org.h2.table.Table;
-import org.h2.util.DateTimeUtils;
+import org.h2.tools.CompressTool;
+import org.h2.util.JdbcUtils;
 import org.h2.util.StringUtils;
-import org.h2.util.TimeZoneProvider;
 import org.h2.value.CompareMode;
-import org.h2.value.DataType;
-import org.h2.value.Value;
-import org.h2.value.ValueInteger;
-import org.h2.value.ValueNull;
+import org.h2.value.ValueInt;
 
 /**
  * This class represents the statement
@@ -46,7 +43,7 @@ public class Set extends Prepared {
     private String stringValue;
     private String[] stringValueList;
 
-    public Set(SessionLocal session, int type) {
+    public Set(Session session, int type) {
         super(session);
         this.type = type;
     }
@@ -70,11 +67,6 @@ public class Set extends Prepared {
         case SetTypes.CATALOG:
         case SetTypes.RETENTION_TIME:
         case SetTypes.LAZY_QUERY_EXECUTION:
-        case SetTypes.NON_KEYWORDS:
-        case SetTypes.TIME_ZONE:
-        case SetTypes.VARIABLE_BINARY:
-        case SetTypes.TRUNCATE_LARGE_LENGTH:
-        case SetTypes.WRITE_DELAY:
             return true;
         default:
         }
@@ -82,7 +74,7 @@ public class Set extends Prepared {
     }
 
     @Override
-    public long update() {
+    public int update() {
         Database database = session.getDatabase();
         String name = SetTypes.getTypeName(type);
         switch (type) {
@@ -126,7 +118,7 @@ public class Set extends Prepared {
                 database.setCluster(value);
                 // use the system session so that the current transaction
                 // (if any) is not committed
-                SessionLocal sysSession = database.getSystemSession();
+                Session sysSession = database.getSystemSession();
                 synchronized (sysSession) {
                     synchronized (database) {
                         addOrUpdateSetting(sysSession, name, value, 0);
@@ -138,10 +130,13 @@ public class Set extends Prepared {
         }
         case SetTypes.COLLATION: {
             session.getUser().checkAdmin();
+            CompareMode currentMode = database.getCompareMode();
+            final boolean binaryUnsigned = currentMode.isBinaryUnsigned();
+            final boolean uuidUnsigned = currentMode.isUuidUnsigned();
             CompareMode compareMode;
             StringBuilder buff = new StringBuilder(stringValue);
             if (stringValue.equals(CompareMode.OFF)) {
-                compareMode = CompareMode.getInstance(null, 0);
+                compareMode = CompareMode.getInstance(null, 0, binaryUnsigned, uuidUnsigned);
             } else {
                 int strength = getIntValue();
                 buff.append(" STRENGTH ");
@@ -154,7 +149,7 @@ public class Set extends Prepared {
                 } else if (strength == Collator.TERTIARY) {
                     buff.append("TERTIARY");
                 }
-                compareMode = CompareMode.getInstance(stringValue, strength);
+                compareMode = CompareMode.getInstance(stringValue, strength, binaryUnsigned, uuidUnsigned);
             }
             synchronized (database) {
                 CompareMode old = database.getCompareMode();
@@ -163,10 +158,69 @@ public class Set extends Prepared {
                 }
                 Table table = database.getFirstUserTable();
                 if (table != null) {
-                    throw DbException.get(ErrorCode.COLLATION_CHANGE_WITH_DATA_TABLE_1, table.getTraceSQL());
+                    throw DbException.get(ErrorCode.COLLATION_CHANGE_WITH_DATA_TABLE_1, table.getSQL(false));
                 }
                 addOrUpdateSetting(name, buff.toString(), 0);
                 database.setCompareMode(compareMode);
+            }
+            break;
+        }
+        case SetTypes.BINARY_COLLATION: {
+            session.getUser().checkAdmin();
+            boolean unsigned;
+            if (stringValue.equals(CompareMode.SIGNED)) {
+                unsigned = false;
+            } else if (stringValue.equals(CompareMode.UNSIGNED)) {
+                unsigned = true;
+            } else {
+                throw DbException.getInvalidValueException("BINARY_COLLATION", stringValue);
+            }
+            synchronized (database) {
+                CompareMode currentMode = database.getCompareMode();
+                if (currentMode.isBinaryUnsigned() != unsigned) {
+                    Table table = database.getFirstUserTable();
+                    if (table != null) {
+                        throw DbException.get(ErrorCode.COLLATION_CHANGE_WITH_DATA_TABLE_1, table.getSQL(false));
+                    }
+                }
+                CompareMode newMode = CompareMode.getInstance(currentMode.getName(),
+                        currentMode.getStrength(), unsigned, currentMode.isUuidUnsigned());
+                addOrUpdateSetting(name, stringValue, 0);
+                database.setCompareMode(newMode);
+            }
+            break;
+        }
+        case SetTypes.UUID_COLLATION: {
+            session.getUser().checkAdmin();
+            boolean unsigned;
+            if (stringValue.equals(CompareMode.SIGNED)) {
+                unsigned = false;
+            } else if (stringValue.equals(CompareMode.UNSIGNED)) {
+                unsigned = true;
+            } else {
+                throw DbException.getInvalidValueException("UUID_COLLATION", stringValue);
+            }
+            synchronized (database) {
+                CompareMode currentMode = database.getCompareMode();
+                if (currentMode.isUuidUnsigned() != unsigned) {
+                    Table table = database.getFirstUserTable();
+                    if (table != null) {
+                        throw DbException.get(ErrorCode.COLLATION_CHANGE_WITH_DATA_TABLE_1, table.getSQL(false));
+                    }
+                }
+                CompareMode newMode = CompareMode.getInstance(currentMode.getName(),
+                        currentMode.getStrength(), currentMode.isBinaryUnsigned(), unsigned);
+                addOrUpdateSetting(name, stringValue, 0);
+                database.setCompareMode(newMode);
+            }
+            break;
+        }
+        case SetTypes.COMPRESS_LOB: {
+            session.getUser().checkAdmin();
+            int algo = CompressTool.getCompressAlgorithm(stringValue);
+            synchronized (database) {
+                database.setLobCompressionAlgorithm(algo == Compressor.NO ? null : stringValue);
+                addOrUpdateSetting(name, stringValue, 0);
             }
             break;
         }
@@ -253,7 +307,7 @@ public class Set extends Prepared {
                 Table table = database.getFirstUserTable();
                 if (table != null) {
                     throw DbException.get(ErrorCode.JAVA_OBJECT_SERIALIZER_CHANGE_WITH_DATA_TABLE,
-                            table.getTraceSQL());
+                            table.getSQL(false));
                 }
                 database.setJavaObjectSerializerName(stringValue);
                 addOrUpdateSetting(name, stringValue, 0);
@@ -286,6 +340,14 @@ public class Set extends Prepared {
             session.setLockTimeout(value);
             break;
         }
+        case SetTypes.LOG: {
+            int value = getIntValue();
+            if (database.isPersistent() && value != database.getLogMode()) {
+                session.getUser().checkAdmin();
+                database.setLogMode(value);
+            }
+            break;
+        }
         case SetTypes.MAX_LENGTH_INPLACE_LOB: {
             session.getUser().checkAdmin();
             int value = getIntValue();
@@ -303,6 +365,10 @@ public class Set extends Prepared {
             int value = getIntValue();
             if (value < 0) {
                 throw DbException.getInvalidValueException("MAX_LOG_SIZE", value);
+            }
+            synchronized (database) {
+                database.setMaxLogSize((long) value * (1024 * 1024));
+                addOrUpdateSetting(name, null, value);
             }
             break;
         }
@@ -325,6 +391,7 @@ public class Set extends Prepared {
                 throw DbException.getInvalidValueException("MAX_MEMORY_UNDO", value);
             }
             synchronized (database) {
+                database.setMaxMemoryUndo(value);
                 addOrUpdateSetting(name, null, value);
             }
             break;
@@ -346,6 +413,7 @@ public class Set extends Prepared {
             if (database.getMode() != mode) {
                 session.getUser().checkAdmin();
                 database.setMode(mode);
+                session.getColumnNamerConfiguration().configure(mode.getEnum());
             }
             break;
         }
@@ -363,7 +431,8 @@ public class Set extends Prepared {
             break;
         }
         case SetTypes.REDO_LOG_BINARY: {
-            DbException.getUnsupportedException("MV_STORE + SET REDO_LOG_BINARY");
+            int value = getIntValue();
+            session.setRedoLogBinary(value == 1);
             break;
         }
         case SetTypes.REFERENTIAL_INTEGRITY: {
@@ -450,6 +519,14 @@ public class Set extends Prepared {
             session.setThrottle(value);
             break;
         }
+        case SetTypes.UNDO_LOG: {
+            int value = getIntValue();
+            if (value < 0 || value > 1) {
+                throw DbException.getInvalidValueException("UNDO_LOG", value);
+            }
+            session.setUndoLogEnabled(value == 1);
+            break;
+        }
         case SetTypes.VARIABLE: {
             Expression expr = expression.optimize(session);
             session.setVariable(stringValue, expr.getValue(session));
@@ -479,6 +556,36 @@ public class Set extends Prepared {
             }
             break;
         }
+        case SetTypes.ROW_FACTORY: {
+            session.getUser().checkAdmin();
+            String rowFactoryName = expression.getColumnName();
+            Class<RowFactory> rowFactoryClass = JdbcUtils.loadUserClass(rowFactoryName);
+            RowFactory rowFactory;
+            try {
+                rowFactory = rowFactoryClass.getDeclaredConstructor().newInstance();
+            } catch (Exception e) {
+                throw DbException.convert(e);
+            }
+            database.setRowFactory(rowFactory);
+            break;
+        }
+        case SetTypes.BATCH_JOINS: {
+            int value = getIntValue();
+            if (value != 0 && value != 1) {
+                throw DbException.getInvalidValueException("BATCH_JOINS", value);
+            }
+            session.setJoinBatchEnabled(value == 1);
+            break;
+        }
+        case SetTypes.FORCE_JOIN_ORDER: {
+            int value = getIntValue();
+            if (value != 0 && value != 1) {
+                throw DbException.getInvalidValueException("FORCE_JOIN_ORDER",
+                        value);
+            }
+            session.setForceJoinOrder(value == 1);
+            break;
+        }
         case SetTypes.LAZY_QUERY_EXECUTION: {
             int value = getIntValue();
             if (value != 0 && value != 1) {
@@ -496,6 +603,11 @@ public class Set extends Prepared {
                         value);
             }
             database.setAllowBuiltinAliasOverride(value == 1);
+            break;
+        }
+        case SetTypes.COLUMN_NAME_RULES: {
+            session.getUser().checkAdmin();
+            session.getColumnNamerConfiguration().configure(expression.getColumnName());
             break;
         }
         case SetTypes.AUTHENTICATOR: {
@@ -521,6 +633,19 @@ public class Set extends Prepared {
             }
             break;
         }
+        case SetTypes.LOCAL_RESULT_FACTORY: {
+            session.getUser().checkAdmin();
+            String localResultFactoryName = expression.getColumnName();
+            Class<LocalResultFactory> localResultFactoryClass = JdbcUtils.loadUserClass(localResultFactoryName);
+            LocalResultFactory localResultFactory;
+            try {
+                localResultFactory = localResultFactoryClass.getDeclaredConstructor().newInstance();
+                database.setResultFactory(localResultFactory);
+            } catch (Exception e) {
+                throw DbException.convert(e);
+            }
+            break;
+        }
         case SetTypes.IGNORE_CATALOGS: {
             session.getUser().checkAdmin();
             int value = getIntValue();
@@ -530,34 +655,8 @@ public class Set extends Prepared {
             }
             break;
         }
-        case SetTypes.NON_KEYWORDS:
-            session.setNonKeywords(Parser.parseNonKeywords(stringValueList));
-            break;
-        case SetTypes.TIME_ZONE:
-            session.setTimeZone(expression == null ? DateTimeUtils.getTimeZone()
-                    : parseTimeZone(expression.getValue(session)));
-            break;
-        case SetTypes.VARIABLE_BINARY:
-            session.setVariableBinary(expression.getBooleanValue(session));
-            break;
-        case SetTypes.DEFAULT_NULL_ORDERING: {
-            DefaultNullOrdering defaultNullOrdering;
-            try {
-                defaultNullOrdering = DefaultNullOrdering.valueOf(StringUtils.toUpperEnglish(stringValue));
-            } catch (RuntimeException e) {
-                throw DbException.getInvalidValueException("DEFAULT_NULL_ORDERING", stringValue);
-            }
-            if (database.getDefaultNullOrdering() != defaultNullOrdering) {
-                session.getUser().checkAdmin();
-                database.setDefaultNullOrdering(defaultNullOrdering);
-            }
-            break;
-        }
-        case SetTypes.TRUNCATE_LARGE_LENGTH:
-            session.setTruncateLargeLength(expression.getBooleanValue(session));
-            break;
         default:
-            throw DbException.getInternalError("type="+type);
+            DbException.throwInternalError("type="+type);
         }
         // the meta data information has changed
         database.getNextModificationDataId();
@@ -567,28 +666,13 @@ public class Set extends Prepared {
         return 0;
     }
 
-    private static TimeZoneProvider parseTimeZone(Value v) {
-        if (DataType.isCharacterStringType(v.getValueType())) {
-            TimeZoneProvider timeZone;
-            try {
-                timeZone = TimeZoneProvider.ofId(v.getString());
-            } catch (IllegalArgumentException ex) {
-                throw DbException.getInvalidValueException("TIME ZONE", v.getTraceSQL());
-            }
-            return timeZone;
-        } else if (v == ValueNull.INSTANCE) {
-            throw DbException.getInvalidValueException("TIME ZONE", v);
-        }
-        return TimeZoneProvider.ofOffset(TimeZoneOperation.parseInterval(v));
-    }
-
     private int getIntValue() {
         expression = expression.optimize(session);
         return expression.getValue(session).getInt();
     }
 
     public void setInt(int value) {
-        this.expression = ValueExpression.get(ValueInteger.get(value));
+        this.expression = ValueExpression.get(ValueInt.get(value));
     }
 
     public void setExpression(Expression expression) {
@@ -599,7 +683,7 @@ public class Set extends Prepared {
         addOrUpdateSetting(session, name, s, v);
     }
 
-    private void addOrUpdateSetting(SessionLocal session, String name, String s, int v) {
+    private void addOrUpdateSetting(Session session, String name, String s, int v) {
         Database database = session.getDatabase();
         assert Thread.holdsLock(database);
         if (database.isReadOnly()) {

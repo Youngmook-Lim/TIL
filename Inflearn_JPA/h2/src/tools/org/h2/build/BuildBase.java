@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -10,12 +10,14 @@ import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.FilterOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.PrintStream;
+import java.io.RandomAccessFile;
 import java.lang.annotation.Documented;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -27,17 +29,11 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileAlreadyExistsException;
-import java.nio.file.FileVisitResult;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.SimpleFileVisitor;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -109,7 +105,7 @@ public class BuildBase {
     /**
      * A list of files.
      */
-    public static class FileList extends ArrayList<Path> {
+    public static class FileList extends ArrayList<File> {
 
         private static final long serialVersionUID = 1L;
 
@@ -158,8 +154,8 @@ public class BuildBase {
             // normalize / and \
             pattern = BuildBase.replaceAll(pattern, "/", File.separator);
             FileList list = new FileList();
-            for (Path f : this) {
-                String path = f.toString();
+            for (File f : this) {
+                String path = f.getPath();
                 boolean match = start ? path.startsWith(pattern) : path.endsWith(pattern);
                 if (match == keep) {
                     list.add(f);
@@ -308,7 +304,12 @@ public class BuildBase {
      */
     protected void projectHelp() {
         Method[] methods = getClass().getDeclaredMethods();
-        Arrays.sort(methods, Comparator.comparing(Method::getName));
+        Arrays.sort(methods, new Comparator<Method>() {
+            @Override
+            public int compare(Method a, Method b) {
+                return a.getName().compareTo(b.getName());
+            }
+        });
         sysOut.println("Targets:");
         String description;
         for (Method m : methods) {
@@ -327,7 +328,7 @@ public class BuildBase {
         sysOut.println();
     }
 
-    protected static boolean isWindows() {
+    private static boolean isWindows() {
         return System.getProperty("os.name").toLowerCase().contains("windows");
     }
 
@@ -436,6 +437,24 @@ public class BuildBase {
     }
 
     /**
+     * Reads the value from a static method of a class using reflection.
+     *
+     * @param className the name of the class
+     * @param methodName the field name
+     * @return the value as a string
+     */
+    protected static String getStaticValue(String className, String methodName) {
+        try {
+            Class<?> clazz = Class.forName(className);
+            Method method = clazz.getMethod(methodName);
+            return method.invoke(null).toString();
+        } catch (Exception e) {
+            throw new RuntimeException("Can not read value " + className + "."
+                    + methodName + "()", e);
+        }
+    }
+
+    /**
      * Copy files to the specified target directory.
      *
      * @param targetDir the target directory
@@ -443,13 +462,14 @@ public class BuildBase {
      * @param baseDir the base directory
      */
     protected void copy(String targetDir, FileList files, String baseDir) {
-        Path target = Paths.get(targetDir);
-        Path base = Paths.get(baseDir);
-        println("Copying " + files.size() + " files to " + target);
-        for (Path f : files) {
-            Path t = target.resolve(base.relativize(f));
+        File target = new File(targetDir);
+        File base = new File(baseDir);
+        println("Copying " + files.size() + " files to " + target.getPath());
+        String basePath = base.getPath();
+        for (File f : files) {
+            File t = new File(target, removeBase(basePath, f.getPath()));
             byte[] data = readFile(f);
-            mkdirs(t.getParent());
+            mkdirs(t.getParentFile());
             writeFile(t, data);
         }
     }
@@ -522,12 +542,7 @@ public class BuildBase {
                         "Generating ",
                 }));
             }
-            Class<?> clazz;
-            try {
-                clazz = Class.forName("jdk.javadoc.internal.tool.Main");
-            } catch (Exception e) {
-                clazz = Class.forName("com.sun.tools.javadoc.Main");
-            }
+            Class<?> clazz = Class.forName("com.sun.tools.javadoc.Main");
             Method execute = clazz.getMethod("execute", String[].class);
             result = (Integer) invoke(execute, null, new Object[] { args });
         } catch (Exception e) {
@@ -579,18 +594,18 @@ public class BuildBase {
      */
     protected void downloadUsingMaven(String target, String group,
             String artifact, String version, String sha1Checksum) {
-        String repoDir = "https://repo1.maven.org/maven2";
-        Path targetFile = Paths.get(target);
-        if (Files.exists(targetFile)) {
+        String repoDir = "http://repo1.maven.org/maven2";
+        File targetFile = new File(target);
+        if (targetFile.exists()) {
             return;
         }
         String repoFile = group.replace('.', '/') + "/" + artifact + "/" + version + "/"
                 + artifact + "-" + version + ".jar";
-        mkdirs(targetFile.toAbsolutePath().getParent());
-        Path localMavenDir = Paths.get(getLocalMavenDir());
-        if (Files.isDirectory(localMavenDir)) {
-            Path f = localMavenDir.resolve(repoFile);
-            if (!Files.exists(f)) {
+        mkdirs(targetFile.getAbsoluteFile().getParentFile());
+        String localMavenDir = getLocalMavenDir();
+        if (new File(localMavenDir).exists()) {
+            File f = new File(localMavenDir, repoFile);
+            if (!f.exists()) {
                 try {
                     execScript("mvn", args(
                             "org.apache.maven.plugins:maven-dependency-plugin:2.1:get",
@@ -600,7 +615,7 @@ public class BuildBase {
                     println("Could not download using Maven: " + e.toString());
                 }
             }
-            if (Files.exists(f)) {
+            if (f.exists()) {
                 byte[] data = readFile(f);
                 String got = getSHA1(data);
                 if (sha1Checksum == null) {
@@ -610,7 +625,7 @@ public class BuildBase {
                         throw new RuntimeException(
                                 "SHA1 checksum mismatch; got: " + got +
                                         " expected: " + sha1Checksum +
-                                        " for file " + f.toAbsolutePath());
+                                        " for file " + f.getAbsolutePath());
                     }
                 }
                 writeFile(targetFile, data);
@@ -635,11 +650,11 @@ public class BuildBase {
      * @param sha1Checksum the SHA-1 checksum or null
      */
     protected void download(String target, String fileURL, String sha1Checksum) {
-        Path targetFile = Paths.get(target);
-        if (Files.exists(targetFile)) {
+        File targetFile = new File(target);
+        if (targetFile.exists()) {
             return;
         }
-        mkdirs(targetFile.toAbsolutePath().getParent());
+        mkdirs(targetFile.getAbsoluteFile().getParentFile());
         ByteArrayOutputStream buff = new ByteArrayOutputStream();
         try {
             println("Downloading " + fileURL);
@@ -649,7 +664,7 @@ public class BuildBase {
             int len = 0;
             while (true) {
                 long now = System.nanoTime();
-                if (now - last > 1_000_000_000L) {
+                if (now > last + TimeUnit.SECONDS.toNanos(1)) {
                     println("Downloaded " + len + " bytes");
                     last = now;
                 }
@@ -686,7 +701,7 @@ public class BuildBase {
      */
     protected FileList files(String dir) {
         FileList list = new FileList();
-        addFiles(list, Paths.get(dir));
+        addFiles(list, new File(dir));
         return list;
     }
 
@@ -700,24 +715,28 @@ public class BuildBase {
         return new StringList(args);
     }
 
-    private static void addFiles(FileList list, Path file) {
-        if (file.getFileName().toString().startsWith(".svn")) {
+    private void addFiles(FileList list, File file) {
+        if (file.getName().startsWith(".svn")) {
             // ignore
-        } else if (Files.isDirectory(file)) {
-            try {
-                Files.walkFileTree(file, new SimpleFileVisitor<Path>() {
-                    @Override
-                    public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-                        list.add(file);
-                        return FileVisitResult.CONTINUE;
-                    }
-                });
-            } catch (IOException e) {
-                throw new RuntimeException("Error reading directory " + file, e);
+        } else if (file.isDirectory()) {
+            String path = file.getPath();
+            for (String fileName : file.list()) {
+                addFiles(list, new File(path, fileName));
             }
         } else {
             list.add(file);
         }
+    }
+
+    private static String removeBase(String basePath, String path) {
+        if (path.startsWith(basePath)) {
+            path = path.substring(basePath.length());
+        }
+        path = path.replace('\\', '/');
+        if (path.startsWith("/")) {
+            path = path.substring(1);
+        }
+        return path;
     }
 
     /**
@@ -726,9 +745,12 @@ public class BuildBase {
      * @param file the file
      * @param data the data to write
      */
-    public static void writeFile(Path file, byte[] data) {
+    public static void writeFile(File file, byte[] data) {
         try {
-            Files.write(file, data);
+            RandomAccessFile ra = new RandomAccessFile(file, "rw");
+            ra.write(data);
+            ra.setLength(data.length);
+            ra.close();
         } catch (IOException e) {
             throw new RuntimeException("Error writing to file " + file, e);
         }
@@ -740,11 +762,28 @@ public class BuildBase {
      * @param file the file
      * @return the data
      */
-    public static byte[] readFile(Path file) {
+    public static byte[] readFile(File file) {
+        RandomAccessFile ra = null;
         try {
-            return Files.readAllBytes(file);
+            ra = new RandomAccessFile(file, "r");
+            long len = ra.length();
+            if (len >= Integer.MAX_VALUE) {
+                throw new RuntimeException("File " + file.getPath() + " is too large");
+            }
+            byte[] buffer = new byte[(int) len];
+            ra.readFully(buffer);
+            ra.close();
+            return buffer;
         } catch (IOException e) {
             throw new RuntimeException("Error reading from file " + file, e);
+        } finally {
+            if (ra != null) {
+                try {
+                    ra.close();
+                } catch (IOException e) {
+                    // ignore
+                }
+            }
         }
     }
 
@@ -792,17 +831,20 @@ public class BuildBase {
             String basePath, boolean storeOnly, boolean sortBySuffix, boolean jar) {
         if (sortBySuffix) {
             // for better compressibility, sort by suffix, then name
-            files.sort((f1, f2) -> {
-                String p1 = f1.toString();
-                String p2 = f2.toString();
-                int comp = getSuffix(p1).compareTo(getSuffix(p2));
-                if (comp == 0) {
-                    comp = p1.compareTo(p2);
+            Collections.sort(files, new Comparator<File>() {
+                @Override
+                public int compare(File f1, File f2) {
+                    String p1 = f1.getPath();
+                    String p2 = f2.getPath();
+                    int comp = getSuffix(p1).compareTo(getSuffix(p2));
+                    if (comp == 0) {
+                        comp = p1.compareTo(p2);
+                    }
+                    return comp;
                 }
-                return comp;
             });
         } else if (jar) {
-            files.sort(new Comparator<Path>() {
+            Collections.sort(files, new Comparator<File>() {
                 private int priority(String path) {
                     if (path.startsWith("META-INF/")) {
                         if (path.equals("META-INF/MANIFEST.MF")) {
@@ -820,9 +862,9 @@ public class BuildBase {
                 }
 
                 @Override
-                public int compare(Path f1, Path f2) {
-                    String p1 = f1.toString();
-                    String p2 = f2.toString();
+                public int compare(File f1, File f2) {
+                    String p1 = f1.getPath();
+                    String p2 = f2.getPath();
                     int comp = Integer.compare(priority(p1), priority(p2));
                     if (comp != 0) {
                         return comp;
@@ -831,16 +873,16 @@ public class BuildBase {
                 }
             });
         }
-        Path dest = Paths.get(destFile).toAbsolutePath();
-        mkdirs(dest.getParent());
-        Path base = Paths.get(basePath);
+        mkdirs(new File(destFile).getAbsoluteFile().getParentFile());
+        // normalize the path (replace / with \ if required)
+        basePath = new File(basePath).getPath();
         try {
-            if (Files.isDirectory(dest)) {
+            if (new File(destFile).isDirectory()) {
                 throw new IOException(
                         "Can't create the file as a directory with this name already exists: "
                                 + destFile);
             }
-            OutputStream out = new BufferedOutputStream(Files.newOutputStream(dest));
+            OutputStream out = new BufferedOutputStream(new FileOutputStream(destFile));
             ZipOutputStream zipOut;
             if (jar) {
                 zipOut = new JarOutputStream(out);
@@ -851,13 +893,14 @@ public class BuildBase {
                 zipOut.setMethod(ZipOutputStream.STORED);
             }
             zipOut.setLevel(Deflater.BEST_COMPRESSION);
-            for (Path file : files) {
-                String entryName = base.relativize(file).toString().replace('\\', '/');
+            for (File file : files) {
+                String fileName = file.getPath();
+                String entryName = removeBase(basePath, fileName);
                 byte[] data = readFile(file);
                 ZipEntry entry = new ZipEntry(entryName);
                 CRC32 crc = new CRC32();
                 crc.update(data);
-                entry.setSize(data.length);
+                entry.setSize(file.length());
                 entry.setCrc(crc.getValue());
                 zipOut.putNextEntry(entry);
                 zipOut.write(data);
@@ -865,14 +908,14 @@ public class BuildBase {
             }
             zipOut.closeEntry();
             zipOut.close();
-            return Files.size(dest) / 1024;
+            return new File(destFile).length() / 1024;
         } catch (IOException e) {
             throw new RuntimeException("Error creating file " + destFile, e);
         }
     }
 
     /**
-     * Get the current java specification version (for example, 1.8).
+     * Get the current java specification version (for example, 1.4).
      *
      * @return the java specification version
      */
@@ -883,15 +926,15 @@ public class BuildBase {
     /**
      * Get the current Java version as integer value.
      *
-     * @return the Java version (8, 9, 10, 11, 12, 13, etc)
+     * @return the Java version (7, 8, 9, 10, 11, etc)
      */
     public static int getJavaVersion() {
-        int version = 8;
+        int version = 7;
         String v = getJavaSpecVersion();
         if (v != null) {
             int idx = v.indexOf('.');
             if (idx >= 0) {
-                // 1.8
+                // 1.7, 1.8
                 v = v.substring(idx + 1);
             }
             version = Integer.parseInt(v);
@@ -901,8 +944,8 @@ public class BuildBase {
 
     private static List<String> getPaths(FileList files) {
         StringList list = new StringList();
-        for (Path f : files) {
-            list.add(f.toString());
+        for (File f : files) {
+            list.add(f.getPath());
         }
         return list;
     }
@@ -966,17 +1009,22 @@ public class BuildBase {
      * @param dir the directory to create
      */
     protected static void mkdir(String dir) {
-        mkdirs(Paths.get(dir));
+        File f = new File(dir);
+        if (f.exists()) {
+            if (f.isFile()) {
+                throw new RuntimeException("Can not create directory " + dir
+                        + " because a file with this name exists");
+            }
+        } else {
+            mkdirs(f);
+        }
     }
 
-    private static void mkdirs(Path f) {
-        try {
-            Files.createDirectories(f);
-        } catch (FileAlreadyExistsException e) {
-            throw new RuntimeException("Can not create directory " + e.getFile()
-                    + " because a file with this name exists");
-        } catch (IOException e) {
-            throw new RuntimeException("Can not create directory " + f.toAbsolutePath());
+    private static void mkdirs(File f) {
+        if (!f.exists()) {
+            if (!f.mkdirs()) {
+                throw new RuntimeException("Can not create directory " + f.getAbsolutePath());
+            }
         }
     }
 
@@ -987,7 +1035,7 @@ public class BuildBase {
      */
     protected void delete(String dir) {
         println("Deleting " + dir);
-        deleteRecursive(Paths.get(dir));
+        delete(new File(dir));
     }
 
     /**
@@ -996,37 +1044,21 @@ public class BuildBase {
      * @param files the name of the files to delete
      */
     protected void delete(FileList files) {
-        for (Path f : files) {
-            deleteRecursive(f);
+        for (File f : files) {
+            delete(f);
         }
     }
 
-    /**
-     * Delete a file or a directory with its content.
-     *
-     * @param file the file or directory to delete
-     */
-    public static void deleteRecursive(Path file) {
-        if (Files.exists(file)) {
-            try {
-                Files.walkFileTree(file, new SimpleFileVisitor<Path>() {
-                    @Override
-                    public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-                        Files.delete(file);
-                        return FileVisitResult.CONTINUE;
-                    }
-
-                    @Override
-                    public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
-                        if (exc == null) {
-                            Files.delete(dir);
-                            return FileVisitResult.CONTINUE;
-                        }
-                        throw exc;
-                    }
-                });
-            } catch (IOException e) {
-                throw new RuntimeException("Can not delete " + file);
+    private void delete(File file) {
+        if (file.exists()) {
+            if (file.isDirectory()) {
+                String path = file.getPath();
+                for (String fileName : file.list()) {
+                    delete(new File(path, fileName));
+                }
+            }
+            if (!file.delete()) {
+                throw new RuntimeException("Can not delete " + file.getPath());
             }
         }
     }

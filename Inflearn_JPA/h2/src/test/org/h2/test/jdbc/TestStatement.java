@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -16,7 +16,9 @@ import java.util.HashMap;
 
 import org.h2.api.ErrorCode;
 import org.h2.engine.SysProperties;
+import org.h2.jdbc.JdbcPreparedStatementBackwardsCompat;
 import org.h2.jdbc.JdbcStatement;
+import org.h2.jdbc.JdbcStatementBackwardsCompat;
 import org.h2.store.fs.FileUtils;
 import org.h2.test.TestBase;
 import org.h2.test.TestDb;
@@ -34,7 +36,7 @@ public class TestStatement extends TestDb {
      * @param a ignored
      */
     public static void main(String... a) throws Exception {
-        TestBase.createCaller().init().testFromMain();
+        TestBase.createCaller().init().test();
     }
 
     @Override
@@ -48,7 +50,6 @@ public class TestStatement extends TestDb {
         testConnectionRollback();
         testStatement();
         testPreparedStatement();
-        testCloseOnCompletion();
         testIdentityMerge();
         conn.close();
         deleteDb("statement");
@@ -205,9 +206,9 @@ public class TestStatement extends TestDb {
         assertEquals(ResultSet.CONCUR_READ_ONLY,
                 stat2.getResultSetConcurrency());
         assertEquals(0, stat.getMaxFieldSize());
-        assertFalse(stat2.isClosed());
+        assertFalse(((JdbcStatement) stat2).isClosed());
         stat2.close();
-        assertTrue(stat2.isClosed());
+        assertTrue(((JdbcStatement) stat2).isClosed());
 
 
         ResultSet rs;
@@ -238,37 +239,38 @@ public class TestStatement extends TestDb {
         assertTrue(stat.getQueryTimeout() == 0);
         trace("executeUpdate");
         count = stat.executeUpdate(
-                "CREATE TABLE TEST(ID INT PRIMARY KEY,V VARCHAR(255))");
+                "CREATE TABLE TEST(ID INT PRIMARY KEY,VALUE VARCHAR(255))");
         assertEquals(0, count);
         count = stat.executeUpdate(
                 "INSERT INTO TEST VALUES(1,'Hello')");
         assertEquals(1, count);
         count = stat.executeUpdate(
-                "INSERT INTO TEST(V,ID) VALUES('JDBC',2)");
+                "INSERT INTO TEST(VALUE,ID) VALUES('JDBC',2)");
         assertEquals(1, count);
         count = stat.executeUpdate(
-                "UPDATE TEST SET V='LDBC' WHERE ID=2 OR ID=1");
+                "UPDATE TEST SET VALUE='LDBC' WHERE ID=2 OR ID=1");
         assertEquals(2, count);
         count = stat.executeUpdate(
-                "UPDATE TEST SET V='\\LDBC\\' WHERE V LIKE 'LDBC' ");
+                "UPDATE TEST SET VALUE='\\LDBC\\' WHERE VALUE LIKE 'LDBC' ");
         assertEquals(2, count);
         count = stat.executeUpdate(
-                "UPDATE TEST SET V='LDBC' WHERE V LIKE '\\\\LDBC\\\\'");
+                "UPDATE TEST SET VALUE='LDBC' WHERE VALUE LIKE '\\\\LDBC\\\\'");
         trace("count:" + count);
         assertEquals(2, count);
         count = stat.executeUpdate("DELETE FROM TEST WHERE ID=-1");
         assertEquals(0, count);
         count = stat.executeUpdate("DELETE FROM TEST WHERE ID=2");
         assertEquals(1, count);
-        largeCount = stat.executeLargeUpdate("DELETE FROM TEST WHERE ID=-1");
+        JdbcStatementBackwardsCompat statBC = (JdbcStatementBackwardsCompat) stat;
+        largeCount = statBC.executeLargeUpdate("DELETE FROM TEST WHERE ID=-1");
         assertEquals(0, largeCount);
-        assertEquals(0, stat.getLargeUpdateCount());
-        largeCount = stat.executeLargeUpdate("INSERT INTO TEST(V,ID) VALUES('JDBC',2)");
+        assertEquals(0, statBC.getLargeUpdateCount());
+        largeCount = statBC.executeLargeUpdate("INSERT INTO TEST(VALUE,ID) VALUES('JDBC',2)");
         assertEquals(1, largeCount);
-        assertEquals(1, stat.getLargeUpdateCount());
-        largeCount = stat.executeLargeUpdate("DELETE FROM TEST WHERE ID=2");
+        assertEquals(1, statBC.getLargeUpdateCount());
+        largeCount = statBC.executeLargeUpdate("DELETE FROM TEST WHERE ID=2");
         assertEquals(1, largeCount);
-        assertEquals(1, stat.getLargeUpdateCount());
+        assertEquals(1, statBC.getLargeUpdateCount());
 
         assertThrows(ErrorCode.METHOD_NOT_ALLOWED_FOR_QUERY, stat).
                 executeUpdate("SELECT * FROM TEST");
@@ -278,13 +280,13 @@ public class TestStatement extends TestDb {
 
         trace("execute");
         result = stat.execute(
-                "CREATE TABLE TEST(ID INT PRIMARY KEY,V VARCHAR(255))");
+                "CREATE TABLE TEST(ID INT PRIMARY KEY,VALUE VARCHAR(255))");
         assertFalse(result);
         result = stat.execute("INSERT INTO TEST VALUES(1,'Hello')");
         assertFalse(result);
-        result = stat.execute("INSERT INTO TEST(V,ID) VALUES('JDBC',2)");
+        result = stat.execute("INSERT INTO TEST(VALUE,ID) VALUES('JDBC',2)");
         assertFalse(result);
-        result = stat.execute("UPDATE TEST SET V='LDBC' WHERE ID=2");
+        result = stat.execute("UPDATE TEST SET VALUE='LDBC' WHERE ID=2");
         assertFalse(result);
         result = stat.execute("DELETE FROM TEST WHERE ID=3");
         assertFalse(result);
@@ -294,15 +296,15 @@ public class TestStatement extends TestDb {
         assertFalse(result);
 
         assertThrows(ErrorCode.METHOD_ONLY_ALLOWED_FOR_QUERY, stat).
-                executeQuery("CREATE TABLE TEST(ID INT PRIMARY KEY,V VARCHAR(255))");
+                executeQuery("CREATE TABLE TEST(ID INT PRIMARY KEY,VALUE VARCHAR(255))");
 
-        stat.execute("CREATE TABLE TEST(ID INT PRIMARY KEY,V VARCHAR(255))");
+        stat.execute("CREATE TABLE TEST(ID INT PRIMARY KEY,VALUE VARCHAR(255))");
 
         assertThrows(ErrorCode.METHOD_ONLY_ALLOWED_FOR_QUERY, stat).
                 executeQuery("INSERT INTO TEST VALUES(1,'Hello')");
 
         assertThrows(ErrorCode.METHOD_ONLY_ALLOWED_FOR_QUERY, stat).
-                executeQuery("UPDATE TEST SET V='LDBC' WHERE ID=2");
+                executeQuery("UPDATE TEST SET VALUE='LDBC' WHERE ID=2");
 
         assertThrows(ErrorCode.METHOD_ONLY_ALLOWED_FOR_QUERY, stat).
                 executeQuery("DELETE FROM TEST WHERE ID=3");
@@ -330,30 +332,6 @@ public class TestStatement extends TestDb {
         assertTrue(conn == stat.getConnection());
 
         stat.close();
-    }
-
-    private void testCloseOnCompletion() throws SQLException {
-        Statement stat = conn.createStatement();
-        assertFalse(stat.isCloseOnCompletion());
-        ResultSet rs = stat.executeQuery("VALUES 1");
-        assertFalse(stat.isCloseOnCompletion());
-        stat.closeOnCompletion();
-        assertTrue(stat.isCloseOnCompletion());
-        assertTrue(rs.next());
-        assertEquals(1, rs.getInt(1));
-        assertFalse(rs.next());
-        rs.close();
-        assertTrue(stat.isClosed());
-        assertThrows(ErrorCode.OBJECT_CLOSED, stat).isCloseOnCompletion();
-        assertThrows(ErrorCode.OBJECT_CLOSED, stat).closeOnCompletion();
-        stat = conn.createStatement();
-        stat.closeOnCompletion();
-        rs = stat.executeQuery("VALUES 1");
-        ResultSet rs2 = stat.executeQuery("VALUES 2");
-        rs.close();
-        assertFalse(stat.isClosed());
-        rs2.close();
-        assertTrue(stat.isClosed());
     }
 
     private void testIdentityMerge() throws SQLException {
@@ -427,15 +405,15 @@ public class TestStatement extends TestDb {
         ps.setInt(1, 6);
         ps.setString(2, "v6");
         ps.addBatch();
-        assertTrue(Arrays.equals(new long[] {1, 1}, ps.executeLargeBatch()));
+        assertTrue(Arrays.equals(new long[] {1, 1}, ((JdbcStatementBackwardsCompat) ps).executeLargeBatch()));
         ps.setInt(1, 7);
         ps.setString(2, "v7");
         assertEquals(1, ps.executeUpdate());
         assertEquals(1, ps.getUpdateCount());
         ps.setInt(1, 8);
         ps.setString(2, "v8");
-        assertEquals(1, ps.executeLargeUpdate());
-        assertEquals(1, ps.getLargeUpdateCount());
+        assertEquals(1, ((JdbcPreparedStatementBackwardsCompat) ps).executeLargeUpdate());
+        assertEquals(1, ((JdbcStatementBackwardsCompat) ps).getLargeUpdateCount());
         stat.execute("drop table test");
     }
 
@@ -449,80 +427,94 @@ public class TestStatement extends TestDb {
         assertEquals("\"FROM\"", stat.enquoteIdentifier("FROM", false));
         assertEquals("\"Test\"", stat.enquoteIdentifier("Test", false));
         assertEquals("\"test\"", stat.enquoteIdentifier("test", false));
-        assertEquals("\"TOP\"", stat.enquoteIdentifier("TOP", false));
+        assertEquals("\"TODAY\"", stat.enquoteIdentifier("TODAY", false));
         assertEquals("\"Test\"", stat.enquoteIdentifier("\"Test\"", false));
         assertEquals("\"Test\"", stat.enquoteIdentifier("\"Test\"", true));
         assertEquals("\"\"\"Test\"", stat.enquoteIdentifier("\"\"\"Test\"", true));
         assertEquals("\"\"", stat.enquoteIdentifier("", false));
         assertEquals("\"\"", stat.enquoteIdentifier("", true));
-        assertEquals("U&\"\"", stat.enquoteIdentifier("U&\"\"", false));
-        assertEquals("U&\"\"", stat.enquoteIdentifier("U&\"\"", true));
-        assertEquals("U&\"\0100\"", stat.enquoteIdentifier("U&\"\0100\"", false));
-        assertEquals("U&\"\0100\"", stat.enquoteIdentifier("U&\"\0100\"", true));
-        assertThrows(NullPointerException.class, () -> stat.enquoteIdentifier(null, false));
-        assertThrows(ErrorCode.INVALID_NAME_1, () -> stat.enquoteIdentifier("\"Test", true));
-        assertThrows(ErrorCode.INVALID_NAME_1, () -> stat.enquoteIdentifier("\"a\"a\"", true));
-        assertThrows(ErrorCode.INVALID_NAME_1, () -> stat.enquoteIdentifier("U&\"a\"a\"", true));
-        assertThrows(ErrorCode.STRING_FORMAT_ERROR_1, () -> stat.enquoteIdentifier("U&\"\\111\"", true));
-        assertEquals("U&\"\\02b0\"", stat.enquoteIdentifier("\u02B0", false));
+        try {
+            stat.enquoteIdentifier(null, false);
+            fail();
+        } catch (NullPointerException ex) {
+            // OK
+        }
+        try {
+            stat.enquoteIdentifier("\"Test", true);
+            fail();
+        } catch (SQLException ex) {
+            assertEquals(ErrorCode.INVALID_NAME_1, ex.getErrorCode());
+        }
+        try {
+            stat.enquoteIdentifier("\"a\"a\"", true);
+            fail();
+        } catch (SQLException ex) {
+            assertEquals(ErrorCode.INVALID_NAME_1, ex.getErrorCode());
+        }
+        // Other lower case characters don't have upper case mappings
+        assertEquals("\u02B0", stat.enquoteIdentifier("\u02B0", false));
 
-        assertTrue(stat.isSimpleIdentifier("SOME_ID_1"));
+        assertTrue(stat.isSimpleIdentifier("SOME_ID"));
         assertFalse(stat.isSimpleIdentifier("SOME ID"));
         assertFalse(stat.isSimpleIdentifier("FROM"));
         assertFalse(stat.isSimpleIdentifier("Test"));
         assertFalse(stat.isSimpleIdentifier("test"));
-        assertFalse(stat.isSimpleIdentifier("TOP"));
-        assertFalse(stat.isSimpleIdentifier("_"));
-        assertFalse(stat.isSimpleIdentifier("_1"));
-        assertFalse(stat.isSimpleIdentifier("\u02B0"));
+        assertFalse(stat.isSimpleIdentifier("TODAY"));
+        // Other lower case characters don't have upper case mappings
+        assertTrue(stat.isSimpleIdentifier("\u02B0"));
 
         conn.close();
         deleteDb("statement");
         conn = getConnection("statement;DATABASE_TO_LOWER=TRUE");
 
-        JdbcStatement stat2 = (JdbcStatement) conn.createStatement();
-        assertEquals("some_id", stat2.enquoteIdentifier("some_id", false));
-        assertEquals("\"some id\"", stat2.enquoteIdentifier("some id", false));
-        assertEquals("\"some_id\"", stat2.enquoteIdentifier("some_id", true));
-        assertEquals("\"from\"", stat2.enquoteIdentifier("from", false));
-        assertEquals("\"Test\"", stat2.enquoteIdentifier("Test", false));
-        assertEquals("\"TEST\"", stat2.enquoteIdentifier("TEST", false));
-        assertEquals("\"top\"", stat2.enquoteIdentifier("top", false));
+        stat = (JdbcStatement) conn.createStatement();
+        assertEquals("some_id", stat.enquoteIdentifier("some_id", false));
+        assertEquals("\"some id\"", stat.enquoteIdentifier("some id", false));
+        assertEquals("\"some_id\"", stat.enquoteIdentifier("some_id", true));
+        assertEquals("\"from\"", stat.enquoteIdentifier("from", false));
+        assertEquals("\"Test\"", stat.enquoteIdentifier("Test", false));
+        assertEquals("\"TEST\"", stat.enquoteIdentifier("TEST", false));
+        assertEquals("\"today\"", stat.enquoteIdentifier("today", false));
 
-        assertTrue(stat2.isSimpleIdentifier("some_id"));
-        assertFalse(stat2.isSimpleIdentifier("some id"));
-        assertFalse(stat2.isSimpleIdentifier("from"));
-        assertFalse(stat2.isSimpleIdentifier("Test"));
-        assertFalse(stat2.isSimpleIdentifier("TEST"));
-        assertFalse(stat2.isSimpleIdentifier("top"));
+        assertTrue(stat.isSimpleIdentifier("some_id"));
+        assertFalse(stat.isSimpleIdentifier("some id"));
+        assertFalse(stat.isSimpleIdentifier("from"));
+        assertFalse(stat.isSimpleIdentifier("Test"));
+        assertFalse(stat.isSimpleIdentifier("TEST"));
+        assertFalse(stat.isSimpleIdentifier("today"));
 
         conn.close();
         deleteDb("statement");
         conn = getConnection("statement;DATABASE_TO_UPPER=FALSE");
 
-        JdbcStatement stat3 = (JdbcStatement) conn.createStatement();
-        assertEquals("SOME_ID", stat3.enquoteIdentifier("SOME_ID", false));
-        assertEquals("some_id", stat3.enquoteIdentifier("some_id", false));
-        assertEquals("\"SOME ID\"", stat3.enquoteIdentifier("SOME ID", false));
-        assertEquals("\"some id\"", stat3.enquoteIdentifier("some id", false));
-        assertEquals("\"SOME_ID\"", stat3.enquoteIdentifier("SOME_ID", true));
-        assertEquals("\"some_id\"", stat3.enquoteIdentifier("some_id", true));
-        assertEquals("\"FROM\"", stat3.enquoteIdentifier("FROM", false));
-        assertEquals("\"from\"", stat3.enquoteIdentifier("from", false));
-        assertEquals("Test", stat3.enquoteIdentifier("Test", false));
-        assertEquals("\"TOP\"", stat3.enquoteIdentifier("TOP", false));
-        assertEquals("\"top\"", stat3.enquoteIdentifier("top", false));
+        stat = (JdbcStatement) conn.createStatement();
+        assertEquals("SOME_ID", stat.enquoteIdentifier("SOME_ID", false));
+        assertEquals("some_id", stat.enquoteIdentifier("some_id", false));
+        assertEquals("\"SOME ID\"", stat.enquoteIdentifier("SOME ID", false));
+        assertEquals("\"some id\"", stat.enquoteIdentifier("some id", false));
+        assertEquals("\"SOME_ID\"", stat.enquoteIdentifier("SOME_ID", true));
+        assertEquals("\"some_id\"", stat.enquoteIdentifier("some_id", true));
+        assertEquals("\"FROM\"", stat.enquoteIdentifier("FROM", false));
+        assertEquals("\"from\"", stat.enquoteIdentifier("from", false));
+        assertEquals("Test", stat.enquoteIdentifier("Test", false));
+        assertEquals("\"TODAY\"", stat.enquoteIdentifier("TODAY", false));
+        assertEquals("\"today\"", stat.enquoteIdentifier("today", false));
 
-        assertTrue(stat3.isSimpleIdentifier("SOME_ID"));
-        assertTrue(stat3.isSimpleIdentifier("some_id"));
-        assertFalse(stat3.isSimpleIdentifier("SOME ID"));
-        assertFalse(stat3.isSimpleIdentifier("some id"));
-        assertFalse(stat3.isSimpleIdentifier("FROM"));
-        assertFalse(stat3.isSimpleIdentifier("from"));
-        assertTrue(stat3.isSimpleIdentifier("Test"));
-        assertFalse(stat3.isSimpleIdentifier("TOP"));
-        assertFalse(stat3.isSimpleIdentifier("top"));
-        assertThrows(NullPointerException.class, () -> stat3.isSimpleIdentifier(null));
+        assertTrue(stat.isSimpleIdentifier("SOME_ID"));
+        assertTrue(stat.isSimpleIdentifier("some_id"));
+        assertFalse(stat.isSimpleIdentifier("SOME ID"));
+        assertFalse(stat.isSimpleIdentifier("some id"));
+        assertFalse(stat.isSimpleIdentifier("FROM"));
+        assertFalse(stat.isSimpleIdentifier("from"));
+        assertTrue(stat.isSimpleIdentifier("Test"));
+        assertFalse(stat.isSimpleIdentifier("TODAY"));
+        assertFalse(stat.isSimpleIdentifier("today"));
+        try {
+            stat.isSimpleIdentifier(null);
+            fail();
+        } catch (NullPointerException ex) {
+            // OK
+        }
 
         conn.close();
     }

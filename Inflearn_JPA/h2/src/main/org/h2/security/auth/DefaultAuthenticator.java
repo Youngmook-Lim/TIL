@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: Alessandro Ventura
  */
@@ -246,10 +246,6 @@ public class DefaultAuthenticator implements Authenticator {
      * Configure the authenticator from a configuration file
      *
      * @param configUrl URL of configuration file
-     * @throws AuthenticationException on failure
-     * @throws SAXException on failure
-     * @throws IOException on failure
-     * @throws ParserConfigurationException on failure
      */
     public void configureFromUrl(URL configUrl) throws AuthenticationException,
             SAXException, IOException, ParserConfigurationException {
@@ -260,7 +256,7 @@ public class DefaultAuthenticator implements Authenticator {
     private void configureFrom(H2AuthConfig config) throws AuthenticationException {
         allowUserRegistration = config.isAllowUserRegistration();
         createMissingRoles = config.isCreateMissingRoles();
-        HashMap<String, CredentialsValidator> newRealms = new HashMap<>();
+        Map<String, CredentialsValidator> newRealms = new HashMap<>();
         for (RealmConfig currentRealmConfig : config.getRealms()) {
             String currentRealmName = currentRealmConfig.getName();
             if (currentRealmName == null) {
@@ -275,7 +271,7 @@ public class DefaultAuthenticator implements Authenticator {
                 throw new AuthenticationException("invalid validator class fo realm " + currentRealmName, e);
             }
             currentValidator.configure(new ConfigProperties(currentRealmConfig.getProperties()));
-            if (newRealms.putIfAbsent(currentRealmConfig.getName().toUpperCase(), currentValidator) != null) {
+            if (newRealms.put(currentRealmConfig.getName().toUpperCase(), currentValidator) != null) {
                 throw new AuthenticationException("Duplicate realm " + currentRealmConfig.getName());
             }
         }

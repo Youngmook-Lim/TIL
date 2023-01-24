@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -21,23 +21,20 @@ import org.h2.message.TraceSystem;
  * This class is used to create new DataSource objects.
  * An application should not use this class directly.
  */
-public final class JdbcDataSourceFactory implements ObjectFactory {
+public class JdbcDataSourceFactory implements ObjectFactory {
 
-    private static final TraceSystem traceSystem;
-
+    private static TraceSystem cachedTraceSystem;
     private final Trace trace;
 
     static {
-        traceSystem = new TraceSystem(SysProperties.CLIENT_TRACE_DIRECTORY + "h2datasource"
-                + Constants.SUFFIX_TRACE_FILE);
-        traceSystem.setLevelFile(SysProperties.DATASOURCE_TRACE_LEVEL);
+        org.h2.Driver.load();
     }
 
     /**
      * The public constructor to create new factory objects.
      */
     public JdbcDataSourceFactory() {
-        trace = traceSystem.getTrace(Trace.JDBCX);
+        trace = getTraceSystem().getTrace(Trace.JDBCX);
     }
 
     /**
@@ -77,10 +74,17 @@ public final class JdbcDataSourceFactory implements ObjectFactory {
 
     /**
      * INTERNAL
-     * @return TraceSystem
      */
     public static TraceSystem getTraceSystem() {
-        return traceSystem;
+        synchronized (JdbcDataSourceFactory.class) {
+            if (cachedTraceSystem == null) {
+                cachedTraceSystem = new TraceSystem(
+                        SysProperties.CLIENT_TRACE_DIRECTORY + "h2datasource" +
+                                Constants.SUFFIX_TRACE_FILE);
+                cachedTraceSystem.setLevelFile(SysProperties.DATASOURCE_TRACE_LEVEL);
+            }
+            return cachedTraceSystem;
+        }
     }
 
     Trace getTrace() {

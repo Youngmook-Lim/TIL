@@ -1,11 +1,13 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.expression;
 
-import org.h2.engine.SessionLocal;
+import org.h2.engine.Session;
+import org.h2.table.ColumnResolver;
+import org.h2.table.TableFilter;
 import org.h2.value.TypeInfo;
 import org.h2.value.Value;
 import org.h2.value.ValueJson;
@@ -13,7 +15,7 @@ import org.h2.value.ValueJson;
 /**
  * A format clause such as FORMAT JSON.
  */
-public final class Format extends Operation1 {
+public class Format extends Expression {
 
     /**
      * Supported formats.
@@ -25,16 +27,17 @@ public final class Format extends Operation1 {
         JSON;
     }
 
+    private Expression expr;
     private final FormatEnum format;
 
-    public Format(Expression arg, FormatEnum format) {
-        super(arg);
+    public Format(Expression expression, FormatEnum format) {
+        this.expr = expression;
         this.format = format;
     }
 
     @Override
-    public Value getValue(SessionLocal session) {
-        return getValue(arg.getValue(session));
+    public Value getValue(Session session) {
+        return getValue(expr.getValue(session));
     }
 
     /**
@@ -48,52 +51,94 @@ public final class Format extends Operation1 {
         switch (value.getValueType()) {
         case Value.NULL:
             return ValueJson.NULL;
-        case Value.VARCHAR:
-        case Value.VARCHAR_IGNORECASE:
-        case Value.CHAR:
+        case Value.STRING:
+        case Value.STRING_IGNORECASE:
+        case Value.STRING_FIXED:
         case Value.CLOB:
             return ValueJson.fromJson(value.getString());
         default:
-            return value.convertTo(TypeInfo.TYPE_JSON);
+            return value.convertTo(Value.JSON);
         }
     }
 
     @Override
-    public Expression optimize(SessionLocal session) {
-        arg = arg.optimize(session);
-        if (arg.isConstant()) {
+    public TypeInfo getType() {
+        return TypeInfo.TYPE_JSON;
+    }
+
+    @Override
+    public void mapColumns(ColumnResolver resolver, int level, int state) {
+        expr.mapColumns(resolver, level, state);
+    }
+
+    @Override
+    public Expression optimize(Session session) {
+        expr = expr.optimize(session);
+        if (expr.isConstant()) {
             return ValueExpression.get(getValue(session));
         }
-        if (arg instanceof Format && format == ((Format) arg).format) {
-            return arg;
+        if (expr instanceof Format && format == ((Format) expr).format) {
+            return expr;
         }
-        type = TypeInfo.TYPE_JSON;
         return this;
     }
 
     @Override
-    public boolean isIdentity() {
-        return arg.isIdentity();
+    public void setEvaluatable(TableFilter tableFilter, boolean b) {
+        expr.setEvaluatable(tableFilter, b);
     }
 
     @Override
-    public StringBuilder getUnenclosedSQL(StringBuilder builder, int sqlFlags) {
-        return arg.getSQL(builder, sqlFlags, AUTO_PARENTHESES).append(" FORMAT ").append(format.name());
+    public boolean isAutoIncrement() {
+        return expr.isAutoIncrement();
+    }
+
+    @Override
+    public StringBuilder getSQL(StringBuilder builder, boolean alwaysQuote) {
+        return expr.getSQL(builder, alwaysQuote).append(" FORMAT ").append(format.name());
+    }
+
+    @Override
+    public void updateAggregate(Session session, int stage) {
+        expr.updateAggregate(session, stage);
     }
 
     @Override
     public int getNullable() {
-        return arg.getNullable();
+        return expr.getNullable();
+    }
+
+    @Override
+    public boolean isEverything(ExpressionVisitor visitor) {
+        return expr.isEverything(visitor);
+    }
+
+    @Override
+    public int getCost() {
+        return expr.getCost();
     }
 
     @Override
     public String getTableName() {
-        return arg.getTableName();
+        return expr.getTableName();
     }
 
     @Override
-    public String getColumnName(SessionLocal session, int columnIndex) {
-        return arg.getColumnName(session, columnIndex);
+    public String getColumnName() {
+        return expr.getColumnName();
+    }
+
+    @Override
+    public int getSubexpressionCount() {
+        return 1;
+    }
+
+    @Override
+    public Expression getSubexpression(int index) {
+        if (index != 0) {
+            throw new IndexOutOfBoundsException();
+        }
+        return expr;
     }
 
 }

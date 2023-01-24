@@ -1,11 +1,11 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.expression.condition;
 
-import org.h2.engine.SessionLocal;
+import org.h2.engine.Session;
 import org.h2.expression.Expression;
 import org.h2.expression.ExpressionVisitor;
 import org.h2.message.DbException;
@@ -26,29 +26,25 @@ public class ConditionLocalAndGlobal extends Condition {
 
     public ConditionLocalAndGlobal(Expression local, Expression global) {
         if (global == null) {
-            throw DbException.getInternalError();
+            DbException.throwInternalError();
         }
         this.local = local;
         this.global = global;
     }
 
     @Override
-    public boolean needParentheses() {
-        return local != null || global.needParentheses();
-    }
-
-    @Override
-    public StringBuilder getUnenclosedSQL(StringBuilder builder, int sqlFlags) {
+    public StringBuilder getSQL(StringBuilder builder, boolean alwaysQuote) {
         if (local == null) {
-            return global.getUnenclosedSQL(builder, sqlFlags);
+            return global.getSQL(builder, alwaysQuote);
         }
-        local.getSQL(builder, sqlFlags, AUTO_PARENTHESES);
+        builder.append('(');
+        local.getSQL(builder, alwaysQuote);
         builder.append("\n    _LOCAL_AND_GLOBAL_ ");
-        return global.getSQL(builder, sqlFlags, AUTO_PARENTHESES);
+        return global.getSQL(builder, alwaysQuote).append(')');
     }
 
     @Override
-    public void createIndexConditions(SessionLocal session, TableFilter filter) {
+    public void createIndexConditions(Session session, TableFilter filter) {
         if (local != null) {
             local.createIndexConditions(session, filter);
         }
@@ -56,12 +52,16 @@ public class ConditionLocalAndGlobal extends Condition {
     }
 
     @Override
-    public Value getValue(SessionLocal session) {
+    public Value getValue(Session session) {
         if (local == null) {
             return global.getValue(session);
         }
-        Value l = local.getValue(session), r;
-        if (l.isFalse() || (r = global.getValue(session)).isFalse()) {
+        Value l = local.getValue(session);
+        if (l != ValueNull.INSTANCE && !l.getBoolean()) {
+            return ValueBoolean.FALSE;
+        }
+        Value r = global.getValue(session);
+        if (r != ValueNull.INSTANCE && !r.getBoolean()) {
             return ValueBoolean.FALSE;
         }
         if (l == ValueNull.INSTANCE || r == ValueNull.INSTANCE) {
@@ -71,14 +71,11 @@ public class ConditionLocalAndGlobal extends Condition {
     }
 
     @Override
-    public Expression optimize(SessionLocal session) {
+    public Expression optimize(Session session) {
         global = global.optimize(session);
         if (local != null) {
             local = local.optimize(session);
-            Expression e = ConditionAndOr.optimizeIfConstant(session, ConditionAndOr.AND, local, global);
-            if (e != null) {
-                return e;
-            }
+            return ConditionAndOr.optimizeConstant(session, this, ConditionAndOr.AND, local, global);
         }
         return this;
     }
@@ -108,7 +105,7 @@ public class ConditionLocalAndGlobal extends Condition {
     }
 
     @Override
-    public void updateAggregate(SessionLocal session, int stage) {
+    public void updateAggregate(Session session, int stage) {
         if (local != null) {
             local.updateAggregate(session, stage);
         }

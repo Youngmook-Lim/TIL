@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -25,14 +25,10 @@ import org.h2.value.Value;
 /**
  * Represents a BLOB value.
  */
-public final class JdbcBlob extends JdbcLob implements Blob {
+public class JdbcBlob extends JdbcLob implements Blob {
 
     /**
      * INTERNAL
-     * @param conn it belongs to
-     * @param value of
-     * @param state of the LOB
-     * @param id of the trace object
      */
     public JdbcBlob(JdbcConnection conn, Value value, State state, int id) {
         super(conn, value, state, TraceObject.BLOB, id);
@@ -81,7 +77,7 @@ public final class JdbcBlob extends JdbcLob implements Blob {
     public byte[] getBytes(long pos, int length) throws SQLException {
         try {
             if (isDebugEnabled()) {
-                debugCode("getBytes(" + pos + ", " + length + ')');
+                debugCode("getBytes("+pos+", "+length+");");
             }
             checkReadable();
             ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -111,7 +107,7 @@ public final class JdbcBlob extends JdbcLob implements Blob {
         }
         try {
             if (isDebugEnabled()) {
-                debugCode("setBytes(" + pos + ", " + quoteBytes(bytes) + ')');
+                debugCode("setBytes("+pos+", "+quoteBytes(bytes)+");");
             }
             checkEditable();
             if (pos != 1) {
@@ -141,7 +137,7 @@ public final class JdbcBlob extends JdbcLob implements Blob {
         }
         try {
             if (isDebugEnabled()) {
-                debugCode("setBytes(" + pos + ", " + quoteBytes(bytes) + ", " + offset + ", " + len + ')');
+                debugCode("setBytes(" + pos + ", " + quoteBytes(bytes) + ", " + offset + ", " + len + ");");
             }
             checkEditable();
             if (pos != 1) {
@@ -173,7 +169,7 @@ public final class JdbcBlob extends JdbcLob implements Blob {
     public OutputStream setBinaryStream(long pos) throws SQLException {
         try {
             if (isDebugEnabled()) {
-                debugCodeCall("setBinaryStream", pos);
+                debugCode("setBinaryStream("+pos+");");
             }
             checkEditable();
             if (pos != 1) {
@@ -205,7 +201,7 @@ public final class JdbcBlob extends JdbcLob implements Blob {
     @Override
     public long position(byte[] pattern, long start) throws SQLException {
         if (isDebugEnabled()) {
-            debugCode("position(" + quoteBytes(pattern) + ", " + start + ')');
+            debugCode("position("+quoteBytes(pattern)+", "+start+");");
         }
         if (Constants.BLOB_SEARCH) {
             try {
@@ -260,7 +256,7 @@ public final class JdbcBlob extends JdbcLob implements Blob {
     @Override
     public long position(Blob blobPattern, long start) throws SQLException {
         if (isDebugEnabled()) {
-            debugCode("position(blobPattern, " + start + ')');
+            debugCode("position(blobPattern, "+start+");");
         }
         if (Constants.BLOB_SEARCH) {
             try {
@@ -296,7 +292,7 @@ public final class JdbcBlob extends JdbcLob implements Blob {
     public InputStream getBinaryStream(long pos, long length) throws SQLException {
         try {
             if (isDebugEnabled()) {
-                debugCode("getBinaryStream(" + pos + ", " + length + ')');
+                debugCode("getBinaryStream(" + pos + ", " + length + ");");
             }
             checkReadable();
             if (state == State.NEW) {

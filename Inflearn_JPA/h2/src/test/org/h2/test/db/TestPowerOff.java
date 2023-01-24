@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -14,6 +14,7 @@ import java.util.Random;
 
 import org.h2.api.ErrorCode;
 import org.h2.engine.Database;
+import org.h2.jdbc.JdbcConnection;
 import org.h2.test.TestBase;
 import org.h2.test.TestDb;
 import org.h2.util.JdbcUtils;
@@ -34,7 +35,7 @@ public class TestPowerOff extends TestDb {
      * @param a ignored
      */
     public static void main(String... a) throws Exception {
-        TestBase.createCaller().init().testFromMain();
+        TestBase.createCaller().init().test();
     }
 
     @Override
@@ -76,18 +77,18 @@ public class TestPowerOff extends TestDb {
         conn = getConnection(url);
         stat = conn.createStatement();
         stat.execute("set write_delay 0");
-        setPowerOffCount(conn, Integer.MAX_VALUE);
-        stat.execute("insert into test(data) values space(11000)");
-        int max = Integer.MAX_VALUE - getPowerOffCount(conn);
+        ((JdbcConnection) conn).setPowerOffCount(Integer.MAX_VALUE);
+        stat.execute("insert into test values(null, space(11000))");
+        int max = Integer.MAX_VALUE - ((JdbcConnection) conn).getPowerOffCount();
         for (int i = 0; i < max + 10; i++) {
             conn.close();
             conn = getConnection(url);
             stat = conn.createStatement();
-            stat.execute("insert into test(data) values space(11000)");
+            stat.execute("insert into test values(null, space(11000))");
             stat.execute("set write_delay 0");
-            setPowerOffCount(conn, i);
+            ((JdbcConnection) conn).setPowerOffCount(i);
             try {
-                stat.execute("insert into test(data) values space(11000)");
+                stat.execute("insert into test values(null, space(11000))");
             } catch (SQLException e) {
                 // ignore
             }
@@ -155,7 +156,7 @@ public class TestPowerOff extends TestDb {
             conn = getConnection(url);
             Statement stat = conn.createStatement();
             stat.execute("SET WRITE_DELAY 0");
-            setPowerOffCount(conn, random.nextInt(100));
+            ((JdbcConnection) conn).setPowerOffCount(random.nextInt(100));
             try {
                 stat.execute("DROP TABLE IF EXISTS TEST");
                 stat.execute("CREATE TABLE TEST" +
@@ -213,7 +214,7 @@ public class TestPowerOff extends TestDb {
                 "(ID INT PRIMARY KEY, NAME VARCHAR(255))");
         stat.execute("INSERT INTO TEST VALUES(1, 'Hello')");
         stat.execute("CHECKPOINT");
-        setPowerOffCount(conn, 1);
+        ((JdbcConnection) conn).setPowerOffCount(1);
         try {
             stat.execute("INSERT INTO TEST VALUES(2, 'Hello')");
             stat.execute("INSERT INTO TEST VALUES(3, 'Hello')");
@@ -223,7 +224,7 @@ public class TestPowerOff extends TestDb {
             assertKnownException(e);
         }
 
-        setPowerOffCount(conn, 0);
+        ((JdbcConnection) conn).setPowerOffCount(0);
         try {
             conn.close();
         } catch (SQLException e) {
@@ -303,7 +304,8 @@ public class TestPowerOff extends TestDb {
             stat.execute("DROP TABLE TEST");
             state = 0;
             if (init) {
-                maxPowerOffCount = Integer.MAX_VALUE - getPowerOffCount(conn);
+                maxPowerOffCount = Integer.MAX_VALUE -
+                        ((JdbcConnection) conn).getPowerOffCount();
             }
             conn.close();
         } catch (SQLException e) {
@@ -321,7 +323,7 @@ public class TestPowerOff extends TestDb {
         int state;
         Database.setInitialPowerOffCount(0);
         Connection conn = getConnection(url);
-        assertEquals(0, getPowerOffCount(conn));
+        assertEquals(0, ((JdbcConnection) conn).getPowerOffCount());
         Statement stat = conn.createStatement();
         DatabaseMetaData meta = conn.getMetaData();
         ResultSet rs = meta.getTables(null, null, "TEST", null);

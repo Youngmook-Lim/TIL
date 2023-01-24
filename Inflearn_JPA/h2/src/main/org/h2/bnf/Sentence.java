@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -8,6 +8,7 @@ package org.h2.bnf;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 
 import org.h2.bnf.context.DbSchema;
 import org.h2.bnf.context.DbTableOrView;
@@ -36,7 +37,7 @@ public class Sentence {
      */
     public static final int FUNCTION = 2;
 
-    private static final int MAX_PROCESSING_TIME = 100;
+    private static final long MAX_PROCESSING_TIME = 100;
 
     /**
      * The map of next tokens in the form type#tokenName token.
@@ -64,7 +65,7 @@ public class Sentence {
      * Start the timer to make sure processing doesn't take too long.
      */
     public void start() {
-        stopAtNs = System.nanoTime() + MAX_PROCESSING_TIME * 1_000_000L;
+        stopAtNs = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(MAX_PROCESSING_TIME);
     }
 
     /**
@@ -73,7 +74,7 @@ public class Sentence {
      * If processing is stopped, this methods throws an IllegalStateException
      */
     public void stopIfRequired() {
-        if (System.nanoTime() - stopAtNs > 0L) {
+        if (System.nanoTime() > stopAtNs) {
             throw new IllegalStateException();
         }
     }

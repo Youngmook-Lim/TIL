@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -8,31 +8,28 @@ package org.h2.test.store;
 import java.nio.ByteBuffer;
 import org.h2.mvstore.DataUtils;
 import org.h2.mvstore.WriteBuffer;
-import org.h2.mvstore.type.BasicDataType;
 import org.h2.mvstore.type.DataType;
 
 /**
  * A row type.
  */
-public class RowDataType extends BasicDataType<Object[]> {
+public class RowDataType implements DataType {
 
-    private final DataType<Object>[] types;
+    static final String PREFIX = "org.h2.test.store.row";
 
-    @SuppressWarnings("unchecked")
+    private final DataType[] types;
+
     RowDataType(DataType[] types) {
         this.types = types;
     }
 
     @Override
-    public Object[][] createStorage(int size) {
-        return new Object[size][];
-    }
-
-    @Override
-    public int compare(Object[] ax, Object[] bx) {
-        if (ax == bx) {
+    public int compare(Object a, Object b) {
+        if (a == b) {
             return 0;
         }
+        Object[] ax = (Object[]) a;
+        Object[] bx = (Object[]) b;
         int al = ax.length;
         int bl = bx.length;
         int len = Math.min(al, bl);
@@ -51,13 +48,28 @@ public class RowDataType extends BasicDataType<Object[]> {
     }
 
     @Override
-    public int getMemory(Object[] x) {
+    public int getMemory(Object obj) {
+        Object[] x = (Object[]) obj;
         int len = x.length;
         int memory = 0;
         for (int i = 0; i < len; i++) {
             memory += types[i].getMemory(x[i]);
         }
         return memory;
+    }
+
+    @Override
+    public void read(ByteBuffer buff, Object[] obj, int len, boolean key) {
+        for (int i = 0; i < len; i++) {
+            obj[i] = read(buff);
+        }
+    }
+
+    @Override
+    public void write(WriteBuffer buff, Object[] obj, int len, boolean key) {
+        for (int i = 0; i < len; i++) {
+            write(buff, obj[i]);
+        }
     }
 
     @Override
@@ -71,11 +83,13 @@ public class RowDataType extends BasicDataType<Object[]> {
     }
 
     @Override
-    public void write(WriteBuffer buff, Object[] x) {
+    public void write(WriteBuffer buff, Object obj) {
+        Object[] x = (Object[]) obj;
         int len = x.length;
         buff.putVarInt(len);
         for (int i = 0; i < len; i++) {
             types[i].write(buff, x[i]);
         }
     }
+
 }

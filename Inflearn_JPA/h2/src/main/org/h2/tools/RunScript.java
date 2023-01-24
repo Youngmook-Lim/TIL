@@ -1,22 +1,26 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.tools;
 
-import java.io.BufferedReader;
-import java.io.File;
+import java.io.BufferedInputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.Reader;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
+import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.concurrent.TimeUnit;
 
+import org.h2.engine.Constants;
+import org.h2.engine.SysProperties;
 import org.h2.message.DbException;
 import org.h2.store.fs.FileUtils;
 import org.h2.util.IOUtils;
@@ -27,6 +31,7 @@ import org.h2.util.Tool;
 
 /**
  * Runs a SQL script against a database.
+ * @h2.resource
  */
 public class RunScript extends Tool {
 
@@ -34,9 +39,8 @@ public class RunScript extends Tool {
     private boolean checkResults;
 
     /**
-     * Options are case sensitive.
+     * Options are case sensitive. Supported options are:
      * <table>
-     * <caption>Supported options</caption>
      * <tr><td>[-help] or [-?]</td>
      * <td>Print the list of options</td></tr>
      * <tr><td>[-url "&lt;url&gt;"]</td>
@@ -58,9 +62,9 @@ public class RunScript extends Tool {
      * <tr><td>[-options ...]</td>
      * <td>RUNSCRIPT options (embedded H2; -*Results not supported)</td></tr>
      * </table>
+     * @h2.resource
      *
      * @param args the command line arguments
-     * @throws SQLException on failure
      */
     public static void main(String... args) throws SQLException {
         new RunScript().runTool(args);
@@ -150,7 +154,6 @@ public class RunScript extends Tool {
      * @param conn the connection to a database
      * @param reader the reader
      * @return the last result set
-     * @throws SQLException on failure
      */
     public static ResultSet execute(Connection conn, Reader reader)
             throws SQLException {
@@ -181,11 +184,14 @@ public class RunScript extends Tool {
     private void process(Connection conn, String fileName,
             boolean continueOnError, Charset charset) throws SQLException,
             IOException {
-        BufferedReader reader = FileUtils.newBufferedReader(fileName, charset);
+        InputStream in = FileUtils.newInputStream(fileName);
+        String path = FileUtils.getParent(fileName);
         try {
-            process(conn, continueOnError, FileUtils.getParent(fileName), reader, charset);
+            in = new BufferedInputStream(in, Constants.IO_BUFFER_SIZE);
+            Reader reader = new InputStreamReader(in, charset);
+            process(conn, continueOnError, path, reader, charset);
         } finally {
-            IOUtils.closeSilently(reader);
+            IOUtils.closeSilently(in);
         }
     }
 
@@ -206,7 +212,7 @@ public class RunScript extends Tool {
                     startsWith("@INCLUDE")) {
                 sql = StringUtils.trimSubstring(sql, "@INCLUDE".length());
                 if (!FileUtils.isAbsolute(sql)) {
-                    sql = path + File.separatorChar + sql;
+                    sql = path + SysProperties.FILE_SEPARATOR + sql;
                 }
                 process(conn, sql, continueOnError, charset);
             } else {
@@ -265,12 +271,19 @@ public class RunScript extends Tool {
         }
     }
 
-    private static void processRunscript(String url, String user, String password, String fileName, String options)
-            throws SQLException {
-        try (Connection conn = JdbcUtils.getConnection(null, url, user, password);
-            Statement stat = conn.createStatement()) {
+    private static void processRunscript(String url, String user, String password,
+            String fileName, String options) throws SQLException {
+        Connection conn = null;
+        Statement stat = null;
+        try {
+            org.h2.Driver.load();
+            conn = DriverManager.getConnection(url, user, password);
+            stat = conn.createStatement();
             String sql = "RUNSCRIPT FROM '" + fileName + "' " + options;
             stat.execute(sql);
+        } finally {
+            JdbcUtils.closeSilently(stat);
+            JdbcUtils.closeSilently(conn);
         }
     }
 
@@ -284,7 +297,6 @@ public class RunScript extends Tool {
      * @param charset the character set or null for UTF-8
      * @param continueOnError if execution should be continued if an error
      *            occurs
-     * @throws SQLException on failure
      */
     public static void execute(String url, String user, String password,
             String fileName, Charset charset, boolean continueOnError)
@@ -304,13 +316,17 @@ public class RunScript extends Tool {
      * @param continueOnError if execution should be continued if an error
      *            occurs
      */
-    void process(String url, String user, String password, String fileName, Charset charset, boolean continueOnError)
-            throws SQLException {
-        if (charset == null) {
-            charset = StandardCharsets.UTF_8;
-        }
-        try (Connection conn = JdbcUtils.getConnection(null, url, user, password)) {
-            process(conn, fileName, continueOnError, charset);
+    void process(String url, String user, String password,
+            String fileName, Charset charset,
+            boolean continueOnError) throws SQLException {
+        try {
+            org.h2.Driver.load();
+            if (charset == null) {
+                charset = StandardCharsets.UTF_8;
+            }
+            try (Connection conn = DriverManager.getConnection(url, user, password)) {
+                process(conn, fileName, continueOnError, charset);
+            }
         } catch (IOException e) {
             throw DbException.convertIOException(e, fileName);
         }

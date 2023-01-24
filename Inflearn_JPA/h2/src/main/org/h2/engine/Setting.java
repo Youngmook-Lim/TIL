@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -7,11 +7,12 @@ package org.h2.engine;
 
 import org.h2.message.DbException;
 import org.h2.message.Trace;
+import org.h2.table.Table;
 
 /**
  * A persistent database setting.
  */
-public final class Setting extends DbObject {
+public class Setting extends DbObjectBase {
 
     private int intValue;
     private String stringValue;
@@ -21,12 +22,12 @@ public final class Setting extends DbObject {
     }
 
     @Override
-    public String getSQL(int sqlFlags) {
+    public String getSQL(boolean alwaysQuote) {
         return getName();
     }
 
     @Override
-    public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
+    public StringBuilder getSQL(StringBuilder builder, boolean alwaysQuote) {
         return builder.append(getName());
     }
 
@@ -47,9 +48,19 @@ public final class Setting extends DbObject {
     }
 
     @Override
+    public String getCreateSQLForCopy(Table table, String quotedName) {
+        throw DbException.throwInternalError(toString());
+    }
+
+    @Override
+    public String getDropSQL() {
+        return null;
+    }
+
+    @Override
     public String getCreateSQL() {
         StringBuilder buff = new StringBuilder("SET ");
-        getSQL(buff, DEFAULT_SQL_FLAGS).append(' ');
+        getSQL(buff, true).append(' ');
         if (stringValue != null) {
             buff.append(stringValue);
         } else {
@@ -64,7 +75,7 @@ public final class Setting extends DbObject {
     }
 
     @Override
-    public void removeChildrenAndResources(SessionLocal session) {
+    public void removeChildrenAndResources(Session session) {
         database.removeMeta(session, getId());
         invalidate();
     }

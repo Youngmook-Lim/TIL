@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -7,20 +7,21 @@ package org.h2.util;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintStream;
 import java.io.StringReader;
 import java.io.StringWriter;
+import java.io.Writer;
 import java.lang.reflect.Array;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.security.SecureClassLoader;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -43,6 +44,7 @@ import javax.tools.ToolProvider;
 import org.h2.api.ErrorCode;
 import org.h2.engine.SysProperties;
 import org.h2.message.DbException;
+import org.h2.store.fs.FileUtils;
 
 /**
  * This class allows to convert source code to a class. It uses one class loader
@@ -124,7 +126,6 @@ public class SourceCompiler {
      *
      * @param packageAndClassName the class name
      * @return the class
-     * @throws ClassNotFoundException on failure
      */
     public Class<?> getClass(String packageAndClassName)
             throws ClassNotFoundException {
@@ -202,7 +203,6 @@ public class SourceCompiler {
      *
      * @param packageAndClassName the package and class name
      * @return the compiled script
-     * @throws ScriptException on failure
      */
     public CompiledScript getCompiledScript(String packageAndClassName) throws ScriptException {
         CompiledScript compiledScript = compiledScripts.get(packageAndClassName);
@@ -229,7 +229,6 @@ public class SourceCompiler {
      *
      * @param className the class name
      * @return the method name
-     * @throws ClassNotFoundException on failure
      */
     public Method getMethod(String className) throws ClassNotFoundException {
         Class<?> clazz = getClass(className);
@@ -257,37 +256,34 @@ public class SourceCompiler {
      * @return the class file
      */
     byte[] javacCompile(String packageName, String className, String source) {
-        Path dir = Paths.get(COMPILE_DIR);
+        File dir = new File(COMPILE_DIR);
         if (packageName != null) {
-            dir = dir.resolve(packageName.replace('.', '/'));
-            try {
-                Files.createDirectories(dir);
-            } catch (Exception e) {
-                throw DbException.convert(e);
-            }
+            dir = new File(dir, packageName.replace('.', '/'));
+            FileUtils.createDirectories(dir.getAbsolutePath());
         }
-        Path javaFile = dir.resolve(className + ".java");
-        Path classFile = dir.resolve(className + ".class");
+        File javaFile = new File(dir, className + ".java");
+        File classFile = new File(dir, className + ".class");
         try {
-            Files.write(javaFile, source.getBytes(StandardCharsets.UTF_8));
-            Files.deleteIfExists(classFile);
+            OutputStream f = FileUtils.newOutputStream(javaFile.getAbsolutePath(), false);
+            Writer out = IOUtils.getBufferedWriter(f);
+            classFile.delete();
+            out.write(source);
+            out.close();
             if (JAVAC_SUN != null) {
                 javacSun(javaFile);
             } else {
                 javacProcess(javaFile);
             }
-            return Files.readAllBytes(classFile);
+            byte[] data = new byte[(int) classFile.length()];
+            DataInputStream in = new DataInputStream(new FileInputStream(classFile));
+            in.readFully(data);
+            in.close();
+            return data;
         } catch (Exception e) {
             throw DbException.convert(e);
         } finally {
-            try {
-                Files.deleteIfExists(javaFile);
-            } catch (IOException e) {
-            }
-            try {
-                Files.deleteIfExists(classFile);
-            } catch (IOException e) {
-            }
+            javaFile.delete();
+            classFile.delete();
         }
     }
 
@@ -356,12 +352,12 @@ public class SourceCompiler {
         }
     }
 
-    private static void javacProcess(Path javaFile) {
+    private static void javacProcess(File javaFile) {
         exec("javac",
                 "-sourcepath", COMPILE_DIR,
                 "-d", COMPILE_DIR,
                 "-encoding", "UTF-8",
-                javaFile.toAbsolutePath().toString());
+                javaFile.getAbsolutePath());
     }
 
     private static int exec(String... args) {
@@ -379,7 +375,7 @@ public class SourceCompiler {
             copyInThread(p.getInputStream(), buff);
             copyInThread(p.getErrorStream(), buff);
             p.waitFor();
-            String output = Utils10.byteArrayOutputStreamToString(buff, StandardCharsets.UTF_8);
+            String output = new String(buff.toByteArray(), StandardCharsets.UTF_8);
             handleSyntaxError(output, p.exitValue());
             return p.exitValue();
         } catch (Exception e) {
@@ -396,11 +392,12 @@ public class SourceCompiler {
         }.execute();
     }
 
-    private static synchronized void javacSun(Path javaFile) {
+    private static synchronized void javacSun(File javaFile) {
         PrintStream old = System.err;
         ByteArrayOutputStream buff = new ByteArrayOutputStream();
+        PrintStream temp = new PrintStream(buff);
         try {
-            System.setErr(new PrintStream(buff, false, "UTF-8"));
+            System.setErr(temp);
             Method compile;
             compile = JAVAC_SUN.getMethod("compile", String[].class);
             Object javac = JAVAC_SUN.getDeclaredConstructor().newInstance();
@@ -412,8 +409,8 @@ public class SourceCompiler {
                     // "-Xlint:unchecked",
                     "-d", COMPILE_DIR,
                     "-encoding", "UTF-8",
-                    javaFile.toAbsolutePath().toString() });
-            String output = Utils10.byteArrayOutputStreamToString(buff, StandardCharsets.UTF_8);
+                    javaFile.getAbsolutePath() });
+            String output = new String(buff.toByteArray(), StandardCharsets.UTF_8);
             handleSyntaxError(output, status);
         } catch (Exception e) {
             throw DbException.convert(e);
@@ -566,20 +563,9 @@ public class SourceCompiler {
             ForwardingJavaFileManager<StandardJavaFileManager> {
 
         /**
-         * We use map because there can be nested, anonymous etc classes.
+         * The class (only one class is kept).
          */
-        Map<String, JavaClassObject> classObjectsByName = new HashMap<>();
-
-        private SecureClassLoader classLoader = new SecureClassLoader() {
-
-            @Override
-            protected Class<?> findClass(String name)
-                    throws ClassNotFoundException {
-                byte[] bytes = classObjectsByName.get(name).getBytes();
-                return super.defineClass(name, bytes, 0,
-                        bytes.length);
-            }
-        };
+        JavaClassObject classObject;
 
         public ClassFileManager(StandardJavaFileManager standardManager) {
             super(standardManager);
@@ -587,14 +573,21 @@ public class SourceCompiler {
 
         @Override
         public ClassLoader getClassLoader(Location location) {
-            return this.classLoader;
+            return new SecureClassLoader() {
+                @Override
+                protected Class<?> findClass(String name)
+                        throws ClassNotFoundException {
+                    byte[] bytes = classObject.getBytes();
+                    return super.defineClass(name, bytes, 0,
+                            bytes.length);
+                }
+            };
         }
 
         @Override
         public JavaFileObject getJavaFileForOutput(Location location,
                 String className, Kind kind, FileObject sibling) throws IOException {
-            JavaClassObject classObject = new JavaClassObject(className, kind);
-            classObjectsByName.put(className, classObject);
+            classObject = new JavaClassObject(className, kind);
             return classObject;
         }
     }

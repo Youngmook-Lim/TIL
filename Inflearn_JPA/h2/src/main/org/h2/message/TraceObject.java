@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -16,7 +16,7 @@ import org.h2.util.StringUtils;
 /**
  * The base class for objects that can print trace information about themselves.
  */
-public abstract class TraceObject {
+public class TraceObject {
 
     /**
      * The trace type id  for callable statements.
@@ -130,7 +130,6 @@ public abstract class TraceObject {
 
     /**
      * INTERNAL
-     * @return id
      */
     public int getTraceId() {
         return id;
@@ -138,7 +137,6 @@ public abstract class TraceObject {
 
     /**
      * INTERNAL
-     * @return object name
      */
     public String getTraceObjectName() {
         return PREFIX[traceType] + id;
@@ -159,7 +157,7 @@ public abstract class TraceObject {
      *
      * @return true if it is
      */
-    protected final boolean isDebugEnabled() {
+    protected boolean isDebugEnabled() {
         return trace.isDebugEnabled();
     }
 
@@ -168,7 +166,7 @@ public abstract class TraceObject {
      *
      * @return true if it is
      */
-    protected final boolean isInfoEnabled() {
+    protected boolean isInfoEnabled() {
         return trace.isInfoEnabled();
     }
 
@@ -181,10 +179,11 @@ public abstract class TraceObject {
      * @param newId the trace object id of the created object
      * @param value the value to assign this new object to
      */
-    protected final void debugCodeAssign(String className, int newType, int newId, String value) {
+    protected void debugCodeAssign(String className, int newType, int newId,
+            String value) {
         if (trace.isDebugEnabled()) {
-            trace.debugCode(className + ' ' + PREFIX[newType] + newId + " = " + getTraceObjectName() + '.' + value
-                    + ';');
+            trace.debugCode(className + " " + PREFIX[newType] +
+                    newId + " = " + getTraceObjectName() + "." + value + ";");
         }
     }
 
@@ -194,9 +193,9 @@ public abstract class TraceObject {
      *
      * @param methodName the method name
      */
-    protected final void debugCodeCall(String methodName) {
+    protected void debugCodeCall(String methodName) {
         if (trace.isDebugEnabled()) {
-            trace.debugCode(getTraceObjectName() + '.' + methodName + "();");
+            trace.debugCode(getTraceObjectName() + "." + methodName + "();");
         }
     }
 
@@ -208,9 +207,10 @@ public abstract class TraceObject {
      * @param methodName the method name
      * @param param one single long parameter
      */
-    protected final void debugCodeCall(String methodName, long param) {
+    protected void debugCodeCall(String methodName, long param) {
         if (trace.isDebugEnabled()) {
-            trace.debugCode(getTraceObjectName() + '.' + methodName + '(' + param + ");");
+            trace.debugCode(getTraceObjectName() + "." +
+                    methodName + "(" + param + ");");
         }
     }
 
@@ -222,9 +222,10 @@ public abstract class TraceObject {
      * @param methodName the method name
      * @param param one single string parameter
      */
-    protected final void debugCodeCall(String methodName, String param) {
+    protected void debugCodeCall(String methodName, String param) {
         if (trace.isDebugEnabled()) {
-            trace.debugCode(getTraceObjectName() + '.' + methodName + '(' + quote(param) + ");");
+            trace.debugCode(getTraceObjectName() + "." +
+                    methodName + "(" + quote(param) + ");");
         }
     }
 
@@ -233,9 +234,9 @@ public abstract class TraceObject {
      *
      * @param text the trace text
      */
-    protected final void debugCode(String text) {
+    protected void debugCode(String text) {
         if (trace.isDebugEnabled()) {
-            trace.debugCode(getTraceObjectName() + '.' + text + ';');
+            trace.debugCode(getTraceObjectName() + "." + text);
         }
     }
 

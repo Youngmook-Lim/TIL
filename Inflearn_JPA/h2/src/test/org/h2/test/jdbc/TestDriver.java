@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -12,7 +12,6 @@ import java.sql.SQLException;
 import java.util.Properties;
 
 import org.h2.Driver;
-import org.h2.api.ErrorCode;
 import org.h2.test.TestBase;
 import org.h2.test.TestDb;
 
@@ -27,14 +26,13 @@ public class TestDriver extends TestDb {
      * @param a ignored
      */
     public static void main(String... a) throws Exception {
-        TestBase.createCaller().init().testFromMain();
+        TestBase.createCaller().init().test();
     }
 
     @Override
     public void test() throws Exception {
         testSettingsAsProperties();
         testDriverObject();
-        testURLs();
     }
 
     private void testSettingsAsProperties() throws Exception {
@@ -47,9 +45,9 @@ public class TestDriver extends TestDb {
         Connection conn = DriverManager.getConnection(url, prop);
         ResultSet rs;
         rs = conn.createStatement().executeQuery(
-                "SELECT SETTING_VALUE FROM INFORMATION_SCHEMA.SETTINGS WHERE SETTING_NAME = 'MAX_COMPACT_TIME'");
+                "select * from information_schema.settings where name='MAX_COMPACT_TIME'");
         rs.next();
-        assertEquals(1234, rs.getInt(1));
+        assertEquals(1234, rs.getInt(2));
         conn.close();
     }
 
@@ -57,16 +55,14 @@ public class TestDriver extends TestDb {
         Driver instance = Driver.load();
         assertTrue(DriverManager.getDriver("jdbc:h2:~/test") == instance);
         Driver.unload();
-        assertThrows(SQLException.class, () -> DriverManager.getDriver("jdbc:h2:~/test"));
+        try {
+            java.sql.Driver d = DriverManager.getDriver("jdbc:h2:~/test");
+            fail(d.toString());
+        } catch (SQLException e) {
+            // ignore
+        }
         Driver.load();
         assertTrue(DriverManager.getDriver("jdbc:h2:~/test") == instance);
-    }
-
-    private void testURLs() throws Exception {
-        java.sql.Driver instance = Driver.load();
-        assertThrows(ErrorCode.URL_FORMAT_ERROR_2, instance).acceptsURL(null);
-        assertThrows(ErrorCode.URL_FORMAT_ERROR_2, instance).connect(null, null);
-        assertNull(instance.connect("jdbc:unknown", null));
     }
 
 }

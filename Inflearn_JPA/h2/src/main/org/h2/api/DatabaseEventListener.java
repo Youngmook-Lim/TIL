@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -66,15 +66,13 @@ public interface DatabaseEventListener extends EventListener {
      *
      * @param url - the database URL
      */
-    default void init(String url) {
-    }
+    void init(String url);
 
     /**
-     * This method is called after the database has been opened. It is safe to
+     * This method is called after the database has been opened. It is save to
      * connect to the database and execute statements at this point.
      */
-    default void opened() {
-    }
+    void opened();
 
     /**
      * This method is called if an exception occurred.
@@ -82,8 +80,7 @@ public interface DatabaseEventListener extends EventListener {
      * @param e the exception
      * @param sql the SQL statement
      */
-    default void exceptionThrown(SQLException e, String sql) {
-    }
+    void exceptionThrown(SQLException e, String sql);
 
     /**
      * This method is called for long running events, such as recovering,
@@ -96,17 +93,15 @@ public interface DatabaseEventListener extends EventListener {
      * @param state the state
      * @param name the object name
      * @param x the current position
-     * @param max the highest possible value or 0 if unknown
+     * @param max the highest possible value (might be 0)
      */
-    default void setProgress(int state, String name, long x, long max) {
-    }
+    void setProgress(int state, String name, int x, int max);
 
     /**
-     * This method is called before the database is closed normally. It is safe
+     * This method is called before the database is closed normally. It is save
      * to connect to the database and execute statements at this point, however
      * the connection must be closed before the method returns.
      */
-    default void closingDatabase() {
-    }
+    void closingDatabase();
 
 }

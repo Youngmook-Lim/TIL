@@ -1,11 +1,12 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.engine;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -19,9 +20,15 @@ import java.util.Map.Entry;
 public class QueryStatisticsData {
 
     private static final Comparator<QueryEntry> QUERY_ENTRY_COMPARATOR =
-            Comparator.comparingLong(q -> q.lastUpdateTime);
+            new Comparator<QueryEntry>() {
+        @Override
+        public int compare(QueryEntry o1, QueryEntry o2) {
+            return Long.signum(o1.lastUpdateTime - o2.lastUpdateTime);
+        }
+    };
 
-    private final HashMap<String, QueryEntry> map = new HashMap<>();
+    private final HashMap<String, QueryEntry> map =
+            new HashMap<>();
 
     private int maxQueryEntries;
 
@@ -38,7 +45,7 @@ public class QueryStatisticsData {
         // worry about external synchronization
         ArrayList<QueryEntry> list = new ArrayList<>(map.values());
         // only return the newest 100 entries
-        list.sort(QUERY_ENTRY_COMPARATOR);
+        Collections.sort(list, QUERY_ENTRY_COMPARATOR);
         return list.subList(0, Math.min(list.size(), maxQueryEntries));
     }
 
@@ -50,7 +57,8 @@ public class QueryStatisticsData {
      *            to execute
      * @param rowCount the query or update row count
      */
-    public synchronized void update(String sqlStatement, long executionTimeNanos, long rowCount) {
+    public synchronized void update(String sqlStatement, long executionTimeNanos,
+            int rowCount) {
         QueryEntry entry = map.get(sqlStatement);
         if (entry == null) {
             entry = new QueryEntry(sqlStatement);
@@ -63,7 +71,7 @@ public class QueryStatisticsData {
         if (map.size() > maxQueryEntries * 1.5f) {
             // Sort the entries by age
             ArrayList<QueryEntry> list = new ArrayList<>(map.values());
-            list.sort(QUERY_ENTRY_COMPARATOR);
+            Collections.sort(list, QUERY_ENTRY_COMPARATOR);
             // Create a set of the oldest 1/3 of the entries
             HashSet<QueryEntry> oldestSet =
                     new HashSet<>(list.subList(0, list.size() / 3));
@@ -118,12 +126,12 @@ public class QueryStatisticsData {
         /**
          * The minimum number of rows.
          */
-        public long rowCountMin;
+        public int rowCountMin;
 
         /**
          * The maximum number of rows.
          */
-        public long rowCountMax;
+        public int rowCountMax;
 
         /**
          * The total number of rows.
@@ -141,8 +149,8 @@ public class QueryStatisticsData {
         public double rowCountMean;
 
         // Using Welford's method, see also
-        // https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
-        // https://www.johndcook.com/blog/standard_deviation/
+        // http://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
+        // http://www.johndcook.com/standard_deviation.html
 
         private double executionTimeM2Nanos;
         private double rowCountM2;
@@ -157,7 +165,7 @@ public class QueryStatisticsData {
          * @param timeNanos the execution time in nanos
          * @param rows the number of rows
          */
-        void update(long timeNanos, long rows) {
+        void update(long timeNanos, int rows) {
             count++;
             executionTimeMinNanos = Math.min(timeNanos, executionTimeMinNanos);
             executionTimeMaxNanos = Math.max(timeNanos, executionTimeMaxNanos);

@@ -1,18 +1,15 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.util;
 
-import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.ZoneOffset;
-import java.time.ZonedDateTime;
-import java.time.format.DateTimeFormatter;
-import java.time.zone.ZoneRules;
-import java.util.Locale;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.GregorianCalendar;
+import java.util.TimeZone;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Provides access to time zone API.
@@ -45,9 +42,6 @@ public abstract class TimeZoneProvider {
         if (offset == 0) {
             return UTC;
         }
-        if (offset < (-18 * 60 * 60) || offset > (18 * 60 * 60)) {
-            throw new IllegalArgumentException("Time zone offset " + offset + " seconds is out of range");
-        }
         return new Simple(offset);
     }
 
@@ -57,10 +51,10 @@ public abstract class TimeZoneProvider {
      * @param id
      *            the ID of the time zone
      * @return the time zone provider with the specified name
-     * @throws RuntimeException
+     * @throws IllegalArgumentException
      *             if time zone with specified ID isn't known
      */
-    public static TimeZoneProvider ofId(String id) throws RuntimeException {
+    public static TimeZoneProvider ofId(String id) throws IllegalArgumentException {
         int length = id.length();
         if (length == 1 && id.charAt(0) == 'Z') {
             return UTC;
@@ -70,20 +64,20 @@ public abstract class TimeZoneProvider {
             if (length == 3) {
                 return UTC;
             }
-            index = 3;
+            index += 3;
         }
-        if (length > index) {
+        readOffset: if (length - index >= 2) {
             boolean negative = false;
             char c = id.charAt(index);
-            if (length > index + 1) {
-                if (c == '+') {
-                    c = id.charAt(++index);
-                } else if (c == '-') {
-                    negative = true;
-                    c = id.charAt(++index);
-                }
+            if (c == '+') {
+                c = id.charAt(++index);
+            } else if (c == '-') {
+                negative = true;
+                c = id.charAt(++index);
+            } else {
+                break readOffset;
             }
-            if (index != 3 && c >= '0' && c <= '9') {
+            if (c >= '0' && c <= '9') {
                 int hour = c - '0';
                 if (++index < length) {
                     c = id.charAt(index);
@@ -147,12 +141,23 @@ public abstract class TimeZoneProvider {
                 return provider;
             }
         }
-        TimeZoneProvider provider = new WithTimeZone(ZoneId.of(id, ZoneId.SHORT_IDS));
+        TimeZoneProvider provider = ofId(id, index, length);
         if (cache == null) {
             CACHE = cache = new TimeZoneProvider[CACHE_SIZE];
         }
         cache[hash] = provider;
         return provider;
+    }
+
+    private static TimeZoneProvider ofId(String id, int index, int length) {
+        if (JSR310.PRESENT) {
+            return JSR310Utils.getTimeZoneProvider(id);
+        }
+        TimeZone tz = TimeZone.getTimeZone(id);
+        if (!tz.getID().startsWith(id)) {
+            throw new IllegalArgumentException(id + " (" + tz.getID() + "?)");
+        }
+        return new WithTimeZone7(TimeZone.getTimeZone(id));
     }
 
     /**
@@ -161,18 +166,10 @@ public abstract class TimeZoneProvider {
      * @return the time zone provider for the system default time zone
      */
     public static TimeZoneProvider getDefault() {
-        ZoneId zoneId = ZoneId.systemDefault();
-        ZoneOffset offset;
-        if (zoneId instanceof ZoneOffset) {
-            offset = (ZoneOffset) zoneId;
-        } else {
-            ZoneRules rules = zoneId.getRules();
-            if (!rules.isFixedOffset()) {
-                return new WithTimeZone(zoneId);
-            }
-            offset = rules.getOffset(Instant.EPOCH);
+        if (JSR310.PRESENT) {
+            return JSR310Utils.getDefaultTimeZoneProvider();
         }
-        return ofOffset(offset.getTotalSeconds());
+        return new WithTimeZone7(TimeZone.getDefault());
     }
 
     /**
@@ -236,9 +233,6 @@ public abstract class TimeZoneProvider {
         return false;
     }
 
-    /**
-     * Time zone provider with offset.
-     */
     private static final class Simple extends TimeZoneProvider {
 
         private final int offset;
@@ -247,22 +241,6 @@ public abstract class TimeZoneProvider {
 
         Simple(int offset) {
             this.offset = offset;
-        }
-
-        @Override
-        public int hashCode() {
-            return offset + 129607;
-        }
-
-        @Override
-        public boolean equals(Object obj) {
-            if (this == obj) {
-                return true;
-            }
-            if (obj == null || obj.getClass() != Simple.class) {
-                return false;
-            }
-            return offset == ((Simple) obj).offset;
         }
 
         @Override
@@ -284,7 +262,7 @@ public abstract class TimeZoneProvider {
         public String getId() {
             String id = this.id;
             if (id == null) {
-                this.id = id = DateTimeUtils.timeZoneNameFromOffsetSeconds(offset);
+                this.id = DateTimeUtils.timeZoneNameFromOffsetSeconds(offset);
             }
             return id;
         }
@@ -307,9 +285,9 @@ public abstract class TimeZoneProvider {
     }
 
     /**
-     * Time zone provider with time zone.
+     * Abstract time zone provider with time zone.
      */
-    static final class WithTimeZone extends TimeZoneProvider {
+    static abstract class WithTimeZone extends TimeZoneProvider {
 
         /**
          * Number of seconds in 400 years.
@@ -321,119 +299,190 @@ public abstract class TimeZoneProvider {
          */
         static final long SECONDS_PER_YEAR = SECONDS_PER_PERIOD / 400;
 
-        private static volatile DateTimeFormatter TIME_ZONE_FORMATTER;
-
-        private final ZoneId zoneId;
-
-        WithTimeZone(ZoneId timeZone) {
-            this.zoneId = timeZone;
+        WithTimeZone() {
         }
 
         @Override
-        public int hashCode() {
-            return zoneId.hashCode() + 951689;
-        }
-
-        @Override
-        public boolean equals(Object obj) {
-            if (this == obj) {
-                return true;
-            }
-            if (obj == null || obj.getClass() != WithTimeZone.class) {
-                return false;
-            }
-            return zoneId.equals(((WithTimeZone) obj).zoneId);
-        }
-
-        @Override
-        public int getTimeZoneOffsetUTC(long epochSeconds) {
-            /*
-             * Construct an Instant with EPOCH seconds within the range
-             * -31,557,014,135,532,000..31,556,889,832,715,999
-             * (-999999999-01-01T00:00-18:00..
-             * +999999999-12-31T23:59:59.999999999+18:00). Too large and too
-             * small EPOCH seconds are replaced with EPOCH seconds within the
-             * range using the 400 years period of the Gregorian calendar.
-             *
-             * H2 has slightly wider range of EPOCH seconds than Instant, and
-             * ZoneRules.getOffset(Instant) does not support all Instant values
-             * in all time zones.
-             */
-            if (epochSeconds > 31_556_889_832_715_999L) {
-                epochSeconds -= SECONDS_PER_PERIOD;
-            } else if (epochSeconds < -31_557_014_135_532_000L) {
-                epochSeconds += SECONDS_PER_PERIOD;
-            }
-            return zoneId.getRules().getOffset(Instant.ofEpochSecond(epochSeconds)).getTotalSeconds();
-        }
-
-        @Override
-        public int getTimeZoneOffsetLocal(long dateValue, long timeNanos) {
-            int second = (int) (timeNanos / DateTimeUtils.NANOS_PER_SECOND);
-            int minute = second / 60;
-            second -= minute * 60;
-            int hour = minute / 60;
-            minute -= hour * 60;
-            return ZonedDateTime.of(LocalDateTime.of(yearForCalendar(DateTimeUtils.yearFromDateValue(dateValue)),
-                    DateTimeUtils.monthFromDateValue(dateValue), DateTimeUtils.dayFromDateValue(dateValue), hour,
-                    minute, second), zoneId).getOffset().getTotalSeconds();
-        }
-
-        @Override
-        public long getEpochSecondsFromLocal(long dateValue, long timeNanos) {
+        public final int getTimeZoneOffsetLocal(long dateValue, long timeNanos) {
             int second = (int) (timeNanos / DateTimeUtils.NANOS_PER_SECOND);
             int minute = second / 60;
             second -= minute * 60;
             int hour = minute / 60;
             minute -= hour * 60;
             int year = DateTimeUtils.yearFromDateValue(dateValue);
+            int month = DateTimeUtils.monthFromDateValue(dateValue);
+            int day = DateTimeUtils.dayFromDateValue(dateValue);
+            return getTimeZoneOffsetLocal(year, month, day, hour, minute, second);
+        }
+
+        /**
+         * Get the timezone offset.
+         *
+         * @param year the year
+         * @param month the month (1 - 12)
+         * @param day the day (1 - 31)
+         * @param hour the hour
+         * @param minute the minute
+         * @param second the second
+         * @return the offset in seconds
+         */
+        abstract int getTimeZoneOffsetLocal(int year, int month, int day, int hour, int minute, int second);
+
+        @Override
+        public final long getEpochSecondsFromLocal(long dateValue, long timeNanos) {
+            int year = DateTimeUtils.yearFromDateValue(dateValue), month = DateTimeUtils.monthFromDateValue(dateValue),
+                    day = DateTimeUtils.dayFromDateValue(dateValue);
+            int second = (int) (timeNanos / DateTimeUtils.NANOS_PER_SECOND);
+            int minute = second / 60;
+            second -= minute * 60;
+            int hour = minute / 60;
+            minute -= hour * 60;
+            return getEpochSecondsFromLocal(year, month, day, hour, minute, second);
+        }
+
+        /**
+         * Get the epoch seconds.
+         *
+         * @param year the year
+         * @param month the month (1 - 12)
+         * @param day the day (1 - 31)
+         * @param hour the hour
+         * @param minute the minute
+         * @param second the second
+         * @return the epoch seconds
+         */
+        abstract long getEpochSecondsFromLocal(int year, int month, int day, int hour, int minute, int second);
+
+    }
+
+    private static final class WithTimeZone7 extends WithTimeZone {
+
+        private static final long EPOCH_SECONDS_HIGH = 730_000 * SECONDS_PER_PERIOD;
+
+        private static final long EPOCH_SECONDS_LOW = -3 * SECONDS_PER_PERIOD;
+
+        private final AtomicReference<GregorianCalendar> cachedCalendar = new AtomicReference<>();
+
+        private final TimeZone timeZone;
+
+        WithTimeZone7(TimeZone timeZone) {
+            this.timeZone = timeZone;
+        }
+
+        @Override
+        public int getTimeZoneOffsetUTC(long epochSeconds) {
+            return timeZone.getOffset(epochSecondsForCalendar(epochSeconds) * 1_000) / 1_000;
+        }
+
+        @Override
+        int getTimeZoneOffsetLocal(int year, int month, int day, int hour, int minute, int second) {
+            year = yearForCalendar(year);
+            GregorianCalendar c = cachedCalendar.getAndSet(null);
+            if (c == null) {
+                c = createCalendar();
+            }
+            c.clear();
+            c.set(Calendar.ERA, GregorianCalendar.AD);
+            c.set(Calendar.YEAR, year);
+            c.set(Calendar.MONTH, /* January is 0 */ month - 1);
+            c.set(Calendar.DAY_OF_MONTH, day);
+            c.set(Calendar.HOUR_OF_DAY, hour);
+            c.set(Calendar.MINUTE, minute);
+            c.set(Calendar.SECOND, second);
+            c.set(Calendar.MILLISECOND, 0);
+            int offset = c.get(Calendar.ZONE_OFFSET) + c.get(Calendar.DST_OFFSET);
+            cachedCalendar.compareAndSet(null, c);
+            return offset / 1_000;
+        }
+
+        @Override
+        long getEpochSecondsFromLocal(int year, int month, int day, int hour, int minute, int second) {
             int yearForCalendar = yearForCalendar(year);
-            long epoch = ZonedDateTime
-                    .of(LocalDateTime.of(yearForCalendar, DateTimeUtils.monthFromDateValue(dateValue),
-                            DateTimeUtils.dayFromDateValue(dateValue), hour, minute, second), zoneId)
-                    .toOffsetDateTime().toEpochSecond();
-            return epoch + (year - yearForCalendar) * SECONDS_PER_YEAR;
+            GregorianCalendar c = cachedCalendar.getAndSet(null);
+            if (c == null) {
+                c = createCalendar();
+            }
+            c.clear();
+            c.set(Calendar.ERA, GregorianCalendar.AD);
+            c.set(Calendar.YEAR, yearForCalendar);
+            c.set(Calendar.MONTH, /* January is 0 */ month - 1);
+            c.set(Calendar.DAY_OF_MONTH, day);
+            c.set(Calendar.HOUR_OF_DAY, hour);
+            c.set(Calendar.MINUTE, minute);
+            c.set(Calendar.SECOND, second);
+            c.set(Calendar.MILLISECOND, 0);
+            long epoch = c.getTimeInMillis();
+            cachedCalendar.compareAndSet(null, c);
+            return epoch / 1_000 + (year - yearForCalendar) * SECONDS_PER_YEAR;
+        }
+
+        private GregorianCalendar createCalendar() {
+            GregorianCalendar c = new GregorianCalendar(timeZone);
+            c.setGregorianChange(DateTimeUtils.PROLEPTIC_GREGORIAN_CHANGE);
+            return c;
         }
 
         @Override
         public String getId() {
-            return zoneId.getId();
+            return timeZone.getID();
         }
 
         @Override
         public String getShortId(long epochSeconds) {
-            DateTimeFormatter timeZoneFormatter = TIME_ZONE_FORMATTER;
-            if (timeZoneFormatter == null) {
-                TIME_ZONE_FORMATTER = timeZoneFormatter = DateTimeFormatter.ofPattern("z", Locale.ENGLISH);
-            }
-            return ZonedDateTime.ofInstant(Instant.ofEpochSecond(epochSeconds), zoneId).format(timeZoneFormatter);
+            return timeZone.getDisplayName(
+                    timeZone.inDaylightTime(new Date(epochSecondsForCalendar(epochSeconds) * 1_000)), TimeZone.SHORT);
         }
 
         /**
-         * Returns a year within the range -999,999,999..999,999,999 for the
-         * given year. Too large and too small years are replaced with years
-         * within the range using the 400 years period of the Gregorian
-         * calendar.
+         * Returns a year within the range 1..292,000,399 for the given year.
+         * Too large and too small years are replaced with years within the
+         * range using the 400 years period of the Gregorian calendar.
+         *
+         * java.util.* datetime API doesn't support too large and too small
+         * years. Years before 1 need special handing, and very old years also
+         * expose bugs in java.util.GregorianCalendar.
          *
          * Because we need them only to calculate a time zone offset, it's safe
-         * to normalize them to such range.
+         * to normalize them to such range. There are no transitions before the
+         * year 1, and large years can have only the periodic transition rules.
          *
          * @param year
          *            the year
          * @return the specified year or the replacement year within the range
          */
         private static int yearForCalendar(int year) {
-            if (year > 999_999_999) {
-                year -= 400;
-            } else if (year < -999_999_999) {
-                year += 400;
+            if (year > 292_000_000) {
+                year = year % 400 + 292_000_000;
+            } else if (year <= 0) {
+                year = year % 400 + 400;
             }
             return year;
         }
 
+        /**
+         * Returns EPOCH seconds within the range
+         * -50,491,123,199..9,214,642,606,780,799
+         * (0370-01-01T00:00:01Z..+292002369-12-31T23:59:59Z). Too large and too
+         * small EPOCH seconds are replaced with EPOCH seconds within the range
+         * using the 400 years period of the Gregorian calendar.
+         *
+         * @param epochSeconds
+         *            the EPOCH seconds
+         * @return the specified or the replacement EPOCH seconds within the
+         *         range
+         */
+        private static long epochSecondsForCalendar(long epochSeconds) {
+            if (epochSeconds > EPOCH_SECONDS_HIGH) {
+                epochSeconds = epochSeconds % SECONDS_PER_PERIOD + EPOCH_SECONDS_HIGH;
+            } else if (epochSeconds < EPOCH_SECONDS_LOW) {
+                epochSeconds = epochSeconds % SECONDS_PER_PERIOD + EPOCH_SECONDS_LOW;
+            }
+            return epochSeconds;
+        }
+
         @Override
         public String toString() {
-            return "TimeZoneProvider " + zoneId.getId();
+            return "TimeZoneProvider " + timeZone.getID();
         }
 
     }

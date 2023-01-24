@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -9,9 +9,9 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.ArrayList;
 
-import org.h2.command.query.AllColumnsForPlan;
+import org.h2.command.dml.AllColumnsForPlan;
 import org.h2.engine.Constants;
-import org.h2.engine.SessionLocal;
+import org.h2.engine.Session;
 import org.h2.message.DbException;
 import org.h2.result.Row;
 import org.h2.result.SearchRow;
@@ -29,16 +29,17 @@ import org.h2.value.ValueNull;
  * A linked index is a index for a linked (remote) table.
  * It is backed by an index on the remote table which is accessed over JDBC.
  */
-public class LinkedIndex extends Index {
+public class LinkedIndex extends BaseIndex {
 
     private final TableLink link;
     private final String targetTableName;
     private long rowCount;
 
-    private final int sqlFlags = QUOTE_ONLY_WHEN_REQUIRED;
+    private final boolean quoteAllIdentifiers = false;
 
-    public LinkedIndex(TableLink table, int id, IndexColumn[] columns, int uniqueColumnCount, IndexType indexType) {
-        super(table, id, null, columns, uniqueColumnCount, indexType);
+    public LinkedIndex(TableLink table, int id, IndexColumn[] columns,
+            IndexType indexType) {
+        super(table, id, null, columns, indexType);
         link = table;
         targetTableName = link.getQualifiedTable();
     }
@@ -49,7 +50,7 @@ public class LinkedIndex extends Index {
     }
 
     @Override
-    public void close(SessionLocal session) {
+    public void close(Session session) {
         // nothing to do
     }
 
@@ -58,7 +59,7 @@ public class LinkedIndex extends Index {
     }
 
     @Override
-    public void add(SessionLocal session, Row row) {
+    public void add(Session session, Row row) {
         ArrayList<Value> params = Utils.newSmallArrayList();
         StringBuilder buff = new StringBuilder("INSERT INTO ");
         buff.append(targetTableName).append(" VALUES(");
@@ -79,7 +80,7 @@ public class LinkedIndex extends Index {
         buff.append(')');
         String sql = buff.toString();
         try {
-            link.execute(sql, params, true, session);
+            link.execute(sql, params, true);
             rowCount++;
         } catch (Exception e) {
             throw TableLink.wrapException(sql, e);
@@ -87,7 +88,7 @@ public class LinkedIndex extends Index {
     }
 
     @Override
-    public Cursor find(SessionLocal session, SearchRow first, SearchRow last) {
+    public Cursor find(Session session, SearchRow first, SearchRow last) {
         ArrayList<Value> params = Utils.newSmallArrayList();
         StringBuilder builder = new StringBuilder("SELECT * FROM ").append(targetTableName).append(" T");
         boolean f = false;
@@ -97,7 +98,7 @@ public class LinkedIndex extends Index {
                 builder.append(f ? " AND " : " WHERE ");
                 f = true;
                 Column col = table.getColumn(i);
-                addColumnName(builder, col);
+                col.getSQL(builder, quoteAllIdentifiers);
                 if (v == ValueNull.INSTANCE) {
                     builder.append(" IS NULL");
                 } else {
@@ -113,7 +114,7 @@ public class LinkedIndex extends Index {
                 builder.append(f ? " AND " : " WHERE ");
                 f = true;
                 Column col = table.getColumn(i);
-                addColumnName(builder, col);
+                col.getSQL(builder, quoteAllIdentifiers);
                 if (v == ValueNull.INSTANCE) {
                     builder.append(" IS NULL");
                 } else {
@@ -125,7 +126,7 @@ public class LinkedIndex extends Index {
         }
         String sql = builder.toString();
         try {
-            PreparedStatement prep = link.execute(sql, params, false, session);
+            PreparedStatement prep = link.execute(sql, params, false);
             ResultSet rs = prep.getResultSet();
             return new LinkedCursor(link, rs, session, sql, prep);
         } catch (Exception e) {
@@ -133,39 +134,9 @@ public class LinkedIndex extends Index {
         }
     }
 
-    private void addColumnName(StringBuilder builder, Column col) {
-        String identifierQuoteString = link.getIdentifierQuoteString();
-        String name = col.getName();
-        if (identifierQuoteString == null || identifierQuoteString.isEmpty() || identifierQuoteString.equals(" ")) {
-            builder.append(name);
-        } else if (identifierQuoteString.equals("\"")) {
-            /*
-             * StringUtils.quoteIdentifier() can produce Unicode identifiers,
-             * but target DBMS isn't required to support them
-             */
-            builder.append('"');
-            int i = name.indexOf('"');
-            if (i < 0) {
-                builder.append(name);
-            } else {
-                builder.append(name, 0, ++i).append('"');
-                for (int l = name.length(); i < l; i++) {
-                    char c = name.charAt(i);
-                    if (c == '"') {
-                        builder.append('"');
-                    }
-                    builder.append(c);
-                }
-            }
-            builder.append('"');
-        } else {
-            builder.append(identifierQuoteString).append(name).append(identifierQuoteString);
-        }
-    }
-
     private void addParameter(StringBuilder builder, Column col) {
         TypeInfo type = col.getType();
-        if (type.getValueType() == Value.CHAR && link.isOracle()) {
+        if (type.getValueType() == Value.STRING_FIXED && link.isOracle()) {
             // workaround for Oracle
             // create table test(id int primary key, name char(15));
             // insert into test values(1, 'Hello')
@@ -177,7 +148,7 @@ public class LinkedIndex extends Index {
     }
 
     @Override
-    public double getCost(SessionLocal session, int[] masks,
+    public double getCost(Session session, int[] masks,
             TableFilter[] filters, int filter, SortOrder sortOrder,
             AllColumnsForPlan allColumnsSet) {
         return 100 + getCostRangeIndex(masks, rowCount +
@@ -185,12 +156,12 @@ public class LinkedIndex extends Index {
     }
 
     @Override
-    public void remove(SessionLocal session) {
+    public void remove(Session session) {
         // nothing to do
     }
 
     @Override
-    public void truncate(SessionLocal session) {
+    public void truncate(Session session) {
         // nothing to do
     }
 
@@ -205,7 +176,19 @@ public class LinkedIndex extends Index {
     }
 
     @Override
-    public void remove(SessionLocal session, Row row) {
+    public boolean canGetFirstOrLast() {
+        return false;
+    }
+
+    @Override
+    public Cursor findFirstOrLast(Session session, boolean first) {
+        // TODO optimization: could get the first or last value (in any case;
+        // maybe not optimized)
+        throw DbException.getUnsupportedException("LINKED");
+    }
+
+    @Override
+    public void remove(Session session, Row row) {
         ArrayList<Value> params = Utils.newSmallArrayList();
         StringBuilder builder = new StringBuilder("DELETE FROM ").append(targetTableName).append(" WHERE ");
         for (int i = 0; i < row.getColumnCount(); i++) {
@@ -213,7 +196,7 @@ public class LinkedIndex extends Index {
                 builder.append("AND ");
             }
             Column col = table.getColumn(i);
-            addColumnName(builder, col);
+            col.getSQL(builder, quoteAllIdentifiers);
             Value v = row.getValue(i);
             if (isNull(v)) {
                 builder.append(" IS NULL ");
@@ -226,7 +209,7 @@ public class LinkedIndex extends Index {
         }
         String sql = builder.toString();
         try {
-            PreparedStatement prep = link.execute(sql, params, false, session);
+            PreparedStatement prep = link.execute(sql, params, false);
             int count = prep.executeUpdate();
             link.reusePreparedStatement(prep, sql);
             rowCount -= count;
@@ -241,16 +224,15 @@ public class LinkedIndex extends Index {
      *
      * @param oldRow the old data
      * @param newRow the new data
-     * @param session the session
      */
-    public void update(Row oldRow, Row newRow, SessionLocal session) {
+    public void update(Row oldRow, Row newRow) {
         ArrayList<Value> params = Utils.newSmallArrayList();
         StringBuilder builder = new StringBuilder("UPDATE ").append(targetTableName).append(" SET ");
         for (int i = 0; i < newRow.getColumnCount(); i++) {
             if (i > 0) {
                 builder.append(", ");
             }
-            table.getColumn(i).getSQL(builder, sqlFlags).append('=');
+            table.getColumn(i).getSQL(builder, quoteAllIdentifiers).append('=');
             Value v = newRow.getValue(i);
             if (v == null) {
                 builder.append("DEFAULT");
@@ -265,7 +247,7 @@ public class LinkedIndex extends Index {
             if (i > 0) {
                 builder.append(" AND ");
             }
-            addColumnName(builder, col);
+            col.getSQL(builder, quoteAllIdentifiers);
             Value v = oldRow.getValue(i);
             if (isNull(v)) {
                 builder.append(" IS NULL");
@@ -277,20 +259,24 @@ public class LinkedIndex extends Index {
         }
         String sql = builder.toString();
         try {
-            link.execute(sql, params, true, session);
+            link.execute(sql, params, true);
         } catch (Exception e) {
             throw TableLink.wrapException(sql, e);
         }
     }
 
     @Override
-    public long getRowCount(SessionLocal session) {
+    public long getRowCount(Session session) {
         return rowCount;
     }
 
     @Override
-    public long getRowCountApproximation(SessionLocal session) {
+    public long getRowCountApproximation() {
         return rowCount;
     }
 
+    @Override
+    public long getDiskSpaceUsed() {
+        return 0;
+    }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -24,7 +24,7 @@ public class TestCacheLongKeyLIRS extends TestBase {
      * @param a ignored
      */
     public static void main(String... a) throws Exception {
-        TestBase.createCaller().init().testFromMain();
+        TestBase.createCaller().init().test();
     }
 
     @Override
@@ -86,8 +86,18 @@ public class TestCacheLongKeyLIRS extends TestBase {
         CacheLongKeyLIRS<Integer> test = createCache(1);
         test.put(1, 10, 100);
         assertEquals(0, test.size());
-        assertThrows(IllegalArgumentException.class, () -> test.put(1, null, 100));
-        assertThrows(IllegalArgumentException.class, () -> test.setMaxMemory(0));
+        try {
+            test.put(1, null, 100);
+            fail();
+        } catch (IllegalArgumentException e) {
+            // expected
+        }
+        try {
+            test.setMaxMemory(0);
+            fail();
+        } catch (IllegalArgumentException e) {
+            // expected
+        }
     }
 
     private void testSize() {

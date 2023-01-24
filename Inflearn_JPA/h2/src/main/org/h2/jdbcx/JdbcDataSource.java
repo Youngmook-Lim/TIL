@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -11,6 +11,7 @@ import java.io.PrintWriter;
 import java.io.Serializable;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.Properties;
 import java.util.logging.Logger;
 import javax.naming.Reference;
 import javax.naming.Referenceable;
@@ -20,6 +21,7 @@ import javax.sql.DataSource;
 import javax.sql.PooledConnection;
 import javax.sql.XAConnection;
 import javax.sql.XADataSource;
+import org.h2.Driver;
 import org.h2.jdbc.JdbcConnection;
 import org.h2.message.DbException;
 import org.h2.message.TraceObject;
@@ -58,8 +60,9 @@ import org.h2.util.StringUtils;
  * In this example the user name and password are serialized as
  * well; this may be a security problem in some cases.
  */
-public final class JdbcDataSource extends TraceObject implements XADataSource, DataSource, ConnectionPoolDataSource,
-        Serializable, Referenceable, JdbcDataSourceBackwardsCompat {
+public class JdbcDataSource extends TraceObject implements XADataSource,
+        DataSource, ConnectionPoolDataSource, Serializable, Referenceable,
+        JdbcDataSourceBackwardsCompat {
 
     private static final long serialVersionUID = 1288136338451857771L;
 
@@ -70,6 +73,10 @@ public final class JdbcDataSource extends TraceObject implements XADataSource, D
     private char[] passwordChars = { };
     private String url = "";
     private String description;
+
+    static {
+        org.h2.Driver.load();
+    }
 
     /**
      * The public constructor.
@@ -84,8 +91,6 @@ public final class JdbcDataSource extends TraceObject implements XADataSource, D
      * Called when de-serializing the object.
      *
      * @param in the input stream
-     * @throws IOException on failure
-     * @throws ClassNotFoundException on failure
      */
     private void readObject(ObjectInputStream in) throws IOException,
             ClassNotFoundException {
@@ -152,7 +157,8 @@ public final class JdbcDataSource extends TraceObject implements XADataSource, D
     @Override
     public Connection getConnection() throws SQLException {
         debugCodeCall("getConnection");
-        return new JdbcConnection(url, null, userName, StringUtils.cloneCharArray(passwordChars), false);
+        return getJdbcConnection(userName,
+                StringUtils.cloneCharArray(passwordChars));
     }
 
     /**
@@ -167,9 +173,29 @@ public final class JdbcDataSource extends TraceObject implements XADataSource, D
     public Connection getConnection(String user, String password)
             throws SQLException {
         if (isDebugEnabled()) {
-            debugCode("getConnection(" + quote(user) + ", \"\")");
+            debugCode("getConnection("+quote(user)+", \"\");");
         }
-        return new JdbcConnection(url, null, user, password, false);
+        return getJdbcConnection(user, convertToCharArray(password));
+    }
+
+    private JdbcConnection getJdbcConnection(String user, char[] password)
+            throws SQLException {
+        if (isDebugEnabled()) {
+            debugCode("getJdbcConnection("+quote(user)+", new char[0]);");
+        }
+        Properties info = new Properties();
+        info.setProperty("user", user);
+        info.put("password", password);
+        Connection conn = Driver.load().connect(url, info);
+        if (conn == null) {
+            throw new SQLException("No suitable driver found for " + url,
+                    "08001", 8001);
+        } else if (!(conn instanceof JdbcConnection)) {
+            throw new SQLException(
+                    "Connecting with old version is not supported: " + url,
+                    "08001", 8001);
+        }
+        return (JdbcConnection) conn;
     }
 
     /**
@@ -223,7 +249,7 @@ public final class JdbcDataSource extends TraceObject implements XADataSource, D
      */
     public void setPassword(String password) {
         debugCodeCall("setPassword", "");
-        this.passwordChars = password == null ? null : password.toCharArray();
+        this.passwordChars = convertToCharArray(password);
     }
 
     /**
@@ -233,9 +259,13 @@ public final class JdbcDataSource extends TraceObject implements XADataSource, D
      */
     public void setPasswordChars(char[] password) {
         if (isDebugEnabled()) {
-            debugCode("setPasswordChars(new char[0])");
+            debugCode("setPasswordChars(new char[0]);");
         }
         this.passwordChars = password;
+    }
+
+    private static char[] convertToCharArray(String s) {
+        return s == null ? null : s.toCharArray();
     }
 
     private static String convertToString(char[] a) {
@@ -318,8 +348,9 @@ public final class JdbcDataSource extends TraceObject implements XADataSource, D
     @Override
     public XAConnection getXAConnection() throws SQLException {
         debugCodeCall("getXAConnection");
-        return new JdbcXAConnection(factory, getNextId(XA_DATA_SOURCE),
-                new JdbcConnection(url, null, userName, StringUtils.cloneCharArray(passwordChars), false));
+        int id = getNextId(XA_DATA_SOURCE);
+        return new JdbcXAConnection(factory, id, getJdbcConnection(userName,
+                StringUtils.cloneCharArray(passwordChars)));
     }
 
     /**
@@ -334,10 +365,11 @@ public final class JdbcDataSource extends TraceObject implements XADataSource, D
     public XAConnection getXAConnection(String user, String password)
             throws SQLException {
         if (isDebugEnabled()) {
-            debugCode("getXAConnection(" + quote(user) + ", \"\")");
+            debugCode("getXAConnection("+quote(user)+", \"\");");
         }
-        return new JdbcXAConnection(factory, getNextId(XA_DATA_SOURCE),
-                new JdbcConnection(url, null, user, password, false));
+        int id = getNextId(XA_DATA_SOURCE);
+        return new JdbcXAConnection(factory, id, getJdbcConnection(user,
+                convertToCharArray(password)));
     }
 
     /**
@@ -364,7 +396,7 @@ public final class JdbcDataSource extends TraceObject implements XADataSource, D
     public PooledConnection getPooledConnection(String user, String password)
             throws SQLException {
         if (isDebugEnabled()) {
-            debugCode("getPooledConnection(" + quote(user) + ", \"\")");
+            debugCode("getPooledConnection("+quote(user)+", \"\");");
         }
         return getXAConnection(user, password);
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -251,102 +251,87 @@ public enum IntervalQualifier {
      * @return full type name
      */
     public String getTypeName(int precision, int scale) {
-        return getTypeName(new StringBuilder(), precision, scale, false).toString();
-    }
-
-    /**
-     * Appends full type name to the specified string builder.
-     *
-     * @param builder string builder
-     * @param precision precision, or {@code -1}
-     * @param scale fractional seconds precision, or {@code -1}
-     * @param qualifierOnly if {@code true}, don't add the INTERVAL prefix
-     * @return the specified string builder
-     */
-    public StringBuilder getTypeName(StringBuilder builder, int precision, int scale, boolean qualifierOnly) {
-        if (!qualifierOnly) {
-            builder.append("INTERVAL ");
-        }
+        StringBuilder b = new StringBuilder("INTERVAL ");
         switch (this) {
         case YEAR:
         case MONTH:
         case DAY:
         case HOUR:
         case MINUTE:
-            builder.append(string);
+            b.append(string);
             if (precision > 0) {
-                builder.append('(').append(precision).append(')');
+                b.append('(').append(precision).append(')');
             }
             break;
         case SECOND:
-            builder.append(string);
+            b.append(string);
             if (precision > 0 || scale >= 0) {
-                builder.append('(').append(precision > 0 ? precision : 2);
+                b.append('(').append(precision > 0 ? precision : 2);
                 if (scale >= 0) {
-                    builder.append(", ").append(scale);
+                    b.append(", ").append(scale);
                 }
-                builder.append(')');
+                b.append(')');
             }
             break;
         case YEAR_TO_MONTH:
-            builder.append("YEAR");
+            b.append("YEAR");
             if (precision > 0) {
-                builder.append('(').append(precision).append(')');
+                b.append('(').append(precision).append(')');
             }
-            builder.append(" TO MONTH");
+            b.append(" TO MONTH");
             break;
         case DAY_TO_HOUR:
-            builder.append("DAY");
+            b.append("DAY");
             if (precision > 0) {
-                builder.append('(').append(precision).append(')');
+                b.append('(').append(precision).append(')');
             }
-            builder.append(" TO HOUR");
+            b.append(" TO HOUR");
             break;
         case DAY_TO_MINUTE:
-            builder.append("DAY");
+            b.append("DAY");
             if (precision > 0) {
-                builder.append('(').append(precision).append(')');
+                b.append('(').append(precision).append(')');
             }
-            builder.append(" TO MINUTE");
+            b.append(" TO MINUTE");
             break;
         case DAY_TO_SECOND:
-            builder.append("DAY");
+            b.append("DAY");
             if (precision > 0) {
-                builder.append('(').append(precision).append(')');
+                b.append('(').append(precision).append(')');
             }
-            builder.append(" TO SECOND");
+            b.append(" TO SECOND");
             if (scale >= 0) {
-                builder.append('(').append(scale).append(')');
+                b.append('(').append(scale).append(')');
             }
             break;
         case HOUR_TO_MINUTE:
-            builder.append("HOUR");
+            b.append("HOUR");
             if (precision > 0) {
-                builder.append('(').append(precision).append(')');
+                b.append('(').append(precision).append(')');
             }
-            builder.append(" TO MINUTE");
+            b.append(" TO MINUTE");
             break;
         case HOUR_TO_SECOND:
-            builder.append("HOUR");
+            b.append("HOUR");
             if (precision > 0) {
-                builder.append('(').append(precision).append(')');
+                b.append('(').append(precision).append(')');
             }
-            builder.append(" TO SECOND");
+            b.append(" TO SECOND");
             if (scale >= 0) {
-                builder.append('(').append(scale).append(')');
+                b.append('(').append(scale).append(')');
             }
             break;
         case MINUTE_TO_SECOND:
-            builder.append("MINUTE");
+            b.append("MINUTE");
             if (precision > 0) {
-                builder.append('(').append(precision).append(')');
+                b.append('(').append(precision).append(')');
             }
-            builder.append(" TO SECOND");
+            b.append(" TO SECOND");
             if (scale >= 0) {
-                builder.append('(').append(scale).append(')');
+                b.append('(').append(scale).append(')');
             }
         }
-        return builder;
+        return b.toString();
     }
 
 }

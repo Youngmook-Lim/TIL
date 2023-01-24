@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -12,10 +12,11 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.WeakHashMap;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-import org.h2.util.SoftValuesHashMap;
+import org.h2.util.SoftHashMap;
 
 /**
  * The global settings of a full text search.
@@ -25,7 +26,7 @@ final class FullTextSettings {
     /**
      * The settings of open indexes.
      */
-    private static final HashMap<String, FullTextSettings> SETTINGS = new HashMap<>();
+    private static final Map<String, FullTextSettings> SETTINGS = new HashMap<>();
 
     /**
      * Whether this instance has been initialized.
@@ -35,12 +36,12 @@ final class FullTextSettings {
     /**
      * The set of words not to index (stop words).
      */
-    private final HashSet<String> ignoreList = new HashSet<>();
+    private final Set<String> ignoreList = new HashSet<>();
 
     /**
      * The set of words / terms.
      */
-    private final HashMap<String, Integer> words = new HashMap<>();
+    private final Map<String, Integer> words = new HashMap<>();
 
     /**
      * The set of indexes in this database.
@@ -50,7 +51,9 @@ final class FullTextSettings {
     /**
      * The prepared statement cache.
      */
-    private final WeakHashMap<Connection, SoftValuesHashMap<String, PreparedStatement>> cache = new WeakHashMap<>();
+    private final SoftHashMap<Connection,
+            SoftHashMap<String, PreparedStatement>> cache =
+            new SoftHashMap<>();
 
     /**
      * The whitespace characters.
@@ -113,7 +116,9 @@ final class FullTextSettings {
      */
     public void addWord(String word, Integer id) {
         synchronized (words) {
-            words.putIfAbsent(word, id);
+            if(!words.containsKey(word)) {
+                words.put(word, id);
+            }
         }
     }
 
@@ -123,7 +128,7 @@ final class FullTextSettings {
      * @param indexId the index id
      * @return the index info
      */
-    IndexInfo getIndexInfo(int indexId) {
+    protected IndexInfo getIndexInfo(int indexId) {
         return indexes.get(indexId);
     }
 
@@ -132,7 +137,7 @@ final class FullTextSettings {
      *
      * @param index the index
      */
-    void addIndexInfo(IndexInfo index) {
+    protected void addIndexInfo(IndexInfo index) {
         indexes.put(index.id, index);
     }
 
@@ -143,7 +148,7 @@ final class FullTextSettings {
      * @param word the word to convert and check
      * @return the uppercase version of the word or null
      */
-    String convertWord(String word) {
+    protected String convertWord(String word) {
         word = normalizeWord(word);
         synchronized (ignoreList) {
             if (ignoreList.contains(word)) {
@@ -158,9 +163,8 @@ final class FullTextSettings {
      *
      * @param conn the connection
      * @return the settings
-     * @throws SQLException on failure
      */
-    static FullTextSettings getInstance(Connection conn)
+    protected static FullTextSettings getInstance(Connection conn)
             throws SQLException {
         String path = getIndexPath(conn);
         FullTextSettings setting;
@@ -183,7 +187,7 @@ final class FullTextSettings {
     private static String getIndexPath(Connection conn) throws SQLException {
         Statement stat = conn.createStatement();
         ResultSet rs = stat.executeQuery(
-                "CALL COALESCE(DATABASE_PATH(), 'MEM:' || DATABASE())");
+                "CALL IFNULL(DATABASE_PATH(), 'MEM:' || DATABASE())");
         rs.next();
         String path = rs.getString(1);
         if ("MEM:UNNAMED".equals(path)) {
@@ -201,12 +205,12 @@ final class FullTextSettings {
      * @param conn the connection
      * @param sql the statement
      * @return the prepared statement
-     * @throws SQLException on failure
      */
-    synchronized PreparedStatement prepare(Connection conn, String sql) throws SQLException {
-        SoftValuesHashMap<String, PreparedStatement> c = cache.get(conn);
+    protected synchronized PreparedStatement prepare(Connection conn, String sql)
+            throws SQLException {
+        SoftHashMap<String, PreparedStatement> c = cache.get(conn);
         if (c == null) {
-            c = new SoftValuesHashMap<>();
+            c = new SoftHashMap<>();
             cache.put(conn, c);
         }
         PreparedStatement prep = c.get(sql);
@@ -223,7 +227,7 @@ final class FullTextSettings {
     /**
      * Remove all indexes from the settings.
      */
-    void removeAllIndexes() {
+    protected void removeAllIndexes() {
         indexes.clear();
     }
 
@@ -232,7 +236,7 @@ final class FullTextSettings {
      *
      * @param index the index to remove
      */
-    void removeIndexInfo(IndexInfo index) {
+    protected void removeIndexInfo(IndexInfo index) {
         indexes.remove(index.id);
     }
 
@@ -241,7 +245,7 @@ final class FullTextSettings {
      *
      * @param b the new value
      */
-    void setInitialized(boolean b) {
+    protected void setInitialized(boolean b) {
         this.initialized = b;
     }
 
@@ -250,24 +254,24 @@ final class FullTextSettings {
      *
      * @return whether this instance is initialized
      */
-    boolean isInitialized() {
+    protected boolean isInitialized() {
         return initialized;
     }
 
     /**
      * Close all fulltext settings, freeing up memory.
      */
-    static void closeAll() {
+    protected static void closeAll() {
         synchronized (SETTINGS) {
             SETTINGS.clear();
         }
     }
 
-    void setWhitespaceChars(String whitespaceChars) {
+    protected void setWhitespaceChars(String whitespaceChars) {
         this.whitespaceChars = whitespaceChars;
     }
 
-    String getWhitespaceChars() {
+    protected String getWhitespaceChars() {
         return whitespaceChars;
     }
 

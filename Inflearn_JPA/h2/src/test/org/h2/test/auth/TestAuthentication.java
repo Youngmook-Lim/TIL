@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: Alessandro Ventura
  */
@@ -10,6 +10,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.HashMap;
+import java.util.Properties;
 import java.util.UUID;
 
 import javax.security.auth.login.AppConfigurationEntry;
@@ -21,7 +22,7 @@ import org.h2.engine.ConnectionInfo;
 import org.h2.engine.Database;
 import org.h2.engine.Engine;
 import org.h2.engine.Role;
-import org.h2.engine.SessionLocal;
+import org.h2.engine.Session;
 import org.h2.engine.User;
 import org.h2.jdbcx.JdbcConnectionPool;
 import org.h2.security.auth.DefaultAuthenticator;
@@ -52,7 +53,7 @@ public class TestAuthentication extends TestBase {
 
     private String externalUserPassword;
     private DefaultAuthenticator defaultAuthenticator;
-    private SessionLocal session;
+    private Session session;
     private Database database;
 
     /**
@@ -61,7 +62,7 @@ public class TestAuthentication extends TestBase {
      * @param a ignored
      */
     public static void main(String... a) throws Exception {
-        TestBase.createCaller().init().testFromMain();
+        TestBase.createCaller().init().test();
     }
 
     /**
@@ -125,8 +126,10 @@ public class TestAuthentication extends TestBase {
         Configuration oldConfiguration = Configuration.getConfiguration();
         try {
             configureJaas();
-            ConnectionInfo connectionInfo = new ConnectionInfo(getDatabaseURL(), null, "dba", null);
-            session = Engine.createSession(connectionInfo);
+            Properties properties = new Properties();
+            properties.setProperty("USER", "dba");
+            ConnectionInfo connectionInfo = new ConnectionInfo(getDatabaseURL(), properties);
+            session = Engine.getInstance().createSession(connectionInfo);
             database = session.getDatabase();
             configureAuthentication(database);
             try {

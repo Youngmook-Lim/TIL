@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -19,6 +19,8 @@ public abstract class ValueCollectionBase extends Value {
      * Values.
      */
     final Value[] values;
+
+    private TypeInfo type;
 
     private int hash;
 
@@ -44,6 +46,15 @@ public abstract class ValueCollectionBase extends Value {
     }
 
     @Override
+    public TypeInfo getType() {
+        TypeInfo type = this.type;
+        if (type == null) {
+            this.type = type = TypeInfo.getTypeInfo(getValueType(), values.length, 0, null);
+        }
+        return type;
+    }
+
+    @Override
     public int compareWithNull(Value v, boolean forEquality, CastDataProvider provider, CompareMode compareMode) {
         if (v == ValueNull.INSTANCE) {
             return Integer.MIN_VALUE;
@@ -51,14 +62,14 @@ public abstract class ValueCollectionBase extends Value {
         ValueCollectionBase l = this;
         int leftType = l.getValueType();
         int rightType = v.getValueType();
-        if (rightType != leftType) {
+        if (rightType != ARRAY && rightType != ROW) {
             throw v.getDataConversionError(leftType);
         }
         ValueCollectionBase r = (ValueCollectionBase) v;
         Value[] leftArray = l.values, rightArray = r.values;
         int leftLength = leftArray.length, rightLength = rightArray.length;
         if (leftLength != rightLength) {
-            if (leftType == ROW) {
+            if (leftType == ROW || rightType == ROW) {
                 throw DbException.get(ErrorCode.COLUMN_COUNT_DOES_NOT_MATCH);
             }
             if (forEquality) {
@@ -104,9 +115,9 @@ public abstract class ValueCollectionBase extends Value {
 
     @Override
     public int getMemory() {
-        int memory = 72 + values.length * Constants.MEMORY_POINTER;
+        int memory = 72;
         for (Value v : values) {
-            memory += v.getMemory();
+            memory += v.getMemory() + Constants.MEMORY_POINTER;
         }
         return memory;
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -21,8 +21,9 @@ import org.h2.compress.CompressDeflate;
 import org.h2.compress.CompressLZF;
 import org.h2.compress.Compressor;
 import org.h2.engine.Constants;
+import org.h2.message.DbException;
 import org.h2.mvstore.tx.TransactionStore;
-import org.h2.mvstore.type.BasicDataType;
+import org.h2.mvstore.type.DataType;
 import org.h2.mvstore.type.StringDataType;
 import org.h2.store.fs.FilePath;
 import org.h2.store.fs.FileUtils;
@@ -36,8 +37,7 @@ public class MVStoreTool {
     /**
      * Runs this tool.
      * Options are case sensitive. Supported options are:
-     * <table>
-     * <caption>Command line options</caption>
+     * <table summary="command line options">
      * <tr><td>[-dump &lt;fileName&gt;]</td>
      * <td>Dump the contends of the file</td></tr>
      * <tr><td>[-info &lt;fileName&gt;]</td>
@@ -110,24 +110,26 @@ public class MVStoreTool {
         }
         long size = FileUtils.size(fileName);
         pw.printf("File %s, %d bytes, %d MB\n", fileName, size, size / 1024 / 1024);
+        FileChannel file = null;
         int blockSize = MVStore.BLOCK_SIZE;
         TreeMap<Integer, Long> mapSizesTotal =
                 new TreeMap<>();
         long pageSizeTotal = 0;
-        try (FileChannel file = FilePath.get(fileName).open("r")) {
+        try {
+            file = FilePath.get(fileName).open("r");
             long fileSize = file.size();
             int len = Long.toHexString(fileSize).length();
             ByteBuffer block = ByteBuffer.allocate(4096);
             long pageCount = 0;
-            for (long pos = 0; pos < fileSize; ) {
+            for (long pos = 0; pos < fileSize;) {
                 block.rewind();
-                // Bugfix - An MVStoreException that wraps EOFException is
+                // Bugfix - An IllegalStateException that wraps EOFException is
                 // thrown when partial writes happens in the case of power off
                 // or file system issues.
                 // So we should skip the broken block at end of the DB file.
                 try {
                     DataUtils.readFully(file, pos, block);
-                } catch (MVStoreException e) {
+                } catch (IllegalStateException e){
                     pos += blockSize;
                     pw.printf("ERROR illegal position %d%n", pos);
                     continue;
@@ -146,10 +148,10 @@ public class MVStoreTool {
                     continue;
                 }
                 block.position(0);
-                Chunk c;
+                Chunk c = null;
                 try {
                     c = Chunk.readChunkHeader(block, pos);
-                } catch (MVStoreException e) {
+                } catch (IllegalStateException e) {
                     pos += blockSize;
                     continue;
                 }
@@ -182,24 +184,23 @@ public class MVStoreTool {
                     int pageSize = chunk.getInt();
                     // check value (ignored)
                     chunk.getShort();
-                    /*int pageNo =*/ DataUtils.readVarInt(chunk);
                     int mapId = DataUtils.readVarInt(chunk);
                     int entries = DataUtils.readVarInt(chunk);
                     int type = chunk.get();
                     boolean compressed = (type & DataUtils.PAGE_COMPRESSED) != 0;
-                    boolean node = (type & DataUtils.PAGE_TYPE_NODE) != 0;
+                    boolean node = (type & 1) != 0;
                     if (details) {
                         pw.printf(
                                 "+%0" + len +
-                                        "x %s, map %x, %d entries, %d bytes, maxLen %x%n",
+                                "x %s, map %x, %d entries, %d bytes, maxLen %x%n",
                                 p,
                                 (node ? "node" : "leaf") +
-                                        (compressed ? " compressed" : ""),
+                                (compressed ? " compressed" : ""),
                                 mapId,
                                 node ? entries + 1 : entries,
                                 pageSize,
                                 DataUtils.getPageMaxLength(DataUtils.getPagePos(0, 0, pageSize, 0))
-                        );
+                                );
                     }
                     p += pageSize;
                     Integer mapSize = mapSizes.get(mapId);
@@ -253,8 +254,8 @@ public class MVStoreTool {
                             for (int i = 0; i < entries; i++) {
                                 long cp = children[i];
                                 pw.printf("    %d children < %s @ " +
-                                                "chunk %x +%0" +
-                                                len + "x%n",
+                                        "chunk %x +%0" +
+                                        len + "x%n",
                                         counts[i],
                                         keys[i],
                                         DataUtils.getPageChunkId(cp),
@@ -262,7 +263,7 @@ public class MVStoreTool {
                             }
                             long cp = children[entries];
                             pw.printf("    %d children >= %s @ chunk %x +%0" +
-                                            len + "x%n",
+                                    len + "x%n",
                                     counts[entries],
                                     keys.length >= entries ? null : keys[entries],
                                     DataUtils.getPageChunkId(cp),
@@ -284,7 +285,7 @@ public class MVStoreTool {
                             for (int i = 0; i <= entries; i++) {
                                 long cp = children[i];
                                 pw.printf("    %d children @ chunk %x +%0" +
-                                                len + "x%n",
+                                        len + "x%n",
                                         counts[i],
                                         DataUtils.getPageChunkId(cp),
                                         DataUtils.getPageOffset(cp));
@@ -323,8 +324,15 @@ public class MVStoreTool {
         } catch (IOException e) {
             pw.println("ERROR: " + e);
             e.printStackTrace(pw);
+        } finally {
+            if (file != null) {
+                try {
+                    file.close();
+                } catch (IOException e) {
+                    // ignore
+                }
+            }
         }
-        // ignore
         pw.flush();
     }
 
@@ -350,7 +358,7 @@ public class MVStoreTool {
         try (MVStore store = new MVStore.Builder().
                 fileName(fileName).recoveryMode().
                 readOnly().open()) {
-            MVMap<String, String> layout = store.getLayoutMap();
+            MVMap<String, String> meta = store.getMetaMap();
             Map<String, Object> header = store.getStoreHeader();
             long fileCreated = DataUtils.readHexLong(header, "created", 0L);
             TreeMap<Integer, Chunk> chunks = new TreeMap<>();
@@ -358,7 +366,7 @@ public class MVStoreTool {
             long maxLength = 0;
             long maxLengthLive = 0;
             long maxLengthNotEmpty = 0;
-            for (Entry<String, String> e : layout.entrySet()) {
+            for (Entry<String, String> e : meta.entrySet()) {
                 String k = e.getKey();
                 if (k.startsWith(DataUtils.META_CHUNK)) {
                     Chunk c = Chunk.fromString(e.getValue());
@@ -439,25 +447,14 @@ public class MVStoreTool {
         String tempName = fileName + Constants.SUFFIX_MV_STORE_TEMP_FILE;
         FileUtils.delete(tempName);
         compact(fileName, tempName, compress);
-        moveAtomicReplace(tempName, fileName);
-    }
-
-    /**
-     * Rename a file(s) of the named store, and try to atomically replace an
-     * existing file(s) of another store.
-     *
-     * @param sourceName the old fully qualified file name of the store
-     * @param destinationName the new fully qualified file name of the store
-     */
-    public static void moveAtomicReplace(String sourceName, String destinationName) {
         try {
-            FileUtils.moveAtomicReplace(sourceName, destinationName);
-        } catch (MVStoreException e) {
-            String newName = destinationName + Constants.SUFFIX_MV_STORE_NEW_FILE;
+            FileUtils.moveAtomicReplace(tempName, fileName);
+        } catch (DbException e) {
+            String newName = fileName + Constants.SUFFIX_MV_STORE_NEW_FILE;
             FileUtils.delete(newName);
-            FileUtils.move(sourceName, newName);
-            FileUtils.delete(destinationName);
-            FileUtils.move(newName, destinationName);
+            FileUtils.move(tempName, newName);
+            FileUtils.delete(fileName);
+            FileUtils.move(newName, fileName);
         }
     }
 
@@ -518,7 +515,6 @@ public class MVStoreTool {
      * @param target the target store
      */
     public static void compact(MVStore source, MVStore target) {
-        target.adoptMetaFrom(source);
         int autoCommitDelay = target.getAutoCommitDelay();
         boolean reuseSpace = target.getReuseSpace();
         try {
@@ -528,9 +524,13 @@ public class MVStoreTool {
             MVMap<String, String> targetMeta = target.getMetaMap();
             for (Entry<String, String> m : sourceMeta.entrySet()) {
                 String key = m.getKey();
-                if (key.startsWith(DataUtils.META_MAP)) {
+                if (key.startsWith(DataUtils.META_CHUNK)) {
+                    // ignore
+                } else if (key.startsWith(DataUtils.META_MAP)) {
                     // ignore
                 } else if (key.startsWith(DataUtils.META_NAME)) {
+                    // ignore
+                } else if (key.startsWith(DataUtils.META_ROOT)) {
                     // ignore
                 } else {
                     targetMeta.put(key, m.getValue());
@@ -543,7 +543,10 @@ public class MVStoreTool {
             // created in the process, especially if retention time
             // is set to a lower value, or even 0.
             for (String mapName : source.getMapNames()) {
-                MVMap.Builder<Object, Object> mp = getGenericMapBuilder();
+                MVMap.Builder<Object, Object> mp =
+                        new MVMap.Builder<>().
+                                keyType(new GenericDataType()).
+                                valueType(new GenericDataType());
                 // This is a hack to preserve chunks occupancy rate accounting.
                 // It exposes design deficiency flaw in MVStore related to lack of
                 // map's type metadata.
@@ -556,7 +559,6 @@ public class MVStoreTool {
                 MVMap<Object, Object> sourceMap = source.openMap(mapName, mp);
                 MVMap<Object, Object> targetMap = target.openMap(mapName, mp);
                 targetMap.copyFrom(sourceMap);
-                targetMeta.put(MVMap.getMapKey(targetMap.getId()), sourceMeta.get(MVMap.getMapKey(sourceMap.getId())));
             }
             // this will end hacky mode of operation with incomplete pages
             // end ensure that all pages are saved
@@ -577,7 +579,7 @@ public class MVStoreTool {
         long version = Long.MAX_VALUE;
         OutputStream ignore = new OutputStream() {
             @Override
-            public void write(int b) {
+            public void write(int b) throws IOException {
                 // ignore
             }
         };
@@ -645,10 +647,10 @@ public class MVStoreTool {
                     pos += blockSize;
                     continue;
                 }
-                Chunk c;
+                Chunk c = null;
                 try {
                     c = Chunk.readChunkHeader(block, pos);
-                } catch (MVStoreException e) {
+                } catch (IllegalStateException e) {
                     pos += blockSize;
                     continue;
                 }
@@ -701,46 +703,38 @@ public class MVStoreTool {
         return newestVersion;
     }
 
-    @SuppressWarnings({"rawtypes","unchecked"})
-    static MVMap.Builder<Object,Object> getGenericMapBuilder() {
-        return (MVMap.Builder)new MVMap.Builder<byte[],byte[]>().
-                keyType(GenericDataType.INSTANCE).
-                valueType(GenericDataType.INSTANCE);
-    }
-
     /**
      * A data type that can read any data that is persisted, and converts it to
      * a byte array.
      */
-    private static class GenericDataType extends BasicDataType<byte[]> {
-        static GenericDataType INSTANCE = new GenericDataType();
-
-        private GenericDataType() {}
+    static class GenericDataType implements DataType {
 
         @Override
-        public boolean isMemoryEstimationAllowed() {
-            return false;
+        public int compare(Object a, Object b) {
+            throw DataUtils.newUnsupportedOperationException("Can not compare");
         }
 
         @Override
-        public int getMemory(byte[] obj) {
-            return obj == null ? 0 : obj.length * 8;
+        public int getMemory(Object obj) {
+            return obj == null ? 0 : ((byte[]) obj).length * 8;
         }
 
         @Override
-        public byte[][] createStorage(int size) {
-            return new byte[size][];
-        }
-
-        @Override
-        public void write(WriteBuffer buff, byte[] obj) {
+        public void write(WriteBuffer buff, Object obj) {
             if (obj != null) {
-                buff.put(obj);
+                buff.put((byte[]) obj);
             }
         }
 
         @Override
-        public byte[] read(ByteBuffer buff) {
+        public void write(WriteBuffer buff, Object[] obj, int len, boolean key) {
+            for (int i = 0; i < len; i++) {
+                write(buff, obj[i]);
+            }
+        }
+
+        @Override
+        public Object read(ByteBuffer buff) {
             int len = buff.remaining();
             if (len == 0) {
                 return null;
@@ -748,6 +742,13 @@ public class MVStoreTool {
             byte[] data = new byte[len];
             buff.get(data);
             return data;
+        }
+
+        @Override
+        public void read(ByteBuffer buff, Object[] obj, int len, boolean key) {
+            for (int i = 0; i < len; i++) {
+                obj[i] = read(buff);
+            }
         }
     }
 }

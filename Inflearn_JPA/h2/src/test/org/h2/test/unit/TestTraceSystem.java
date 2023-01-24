@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -7,11 +7,9 @@ package org.h2.test.unit;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
-import java.nio.charset.StandardCharsets;
 import org.h2.message.TraceSystem;
 import org.h2.store.fs.FileUtils;
 import org.h2.test.TestBase;
-import org.h2.util.Utils10;
 
 /**
  * Tests the trace system
@@ -24,7 +22,7 @@ public class TestTraceSystem extends TestBase {
      * @param a ignored
      */
     public static void main(String... a) throws Exception {
-        TestBase.createCaller().init().testFromMain();
+        TestBase.createCaller().init().test();
     }
 
     @Override
@@ -50,14 +48,14 @@ public class TestTraceSystem extends TestBase {
         ts.close();
     }
 
-    private void testTraceDebug() throws Exception {
+    private void testTraceDebug() {
         TraceSystem ts = new TraceSystem(null);
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        ts.setSysOut(new PrintStream(out, false, "UTF-8"));
+        ts.setSysOut(new PrintStream(out));
         ts.setLevelSystemOut(TraceSystem.DEBUG);
         ts.getTrace("test").debug(new Exception("error"), "test");
         ts.close();
-        String outString = Utils10.byteArrayOutputStreamToString(out, StandardCharsets.UTF_8);
+        String outString = new String(out.toByteArray());
         assertContains(outString, "error");
         assertContains(outString, "Exception");
         assertContains(outString, "test");

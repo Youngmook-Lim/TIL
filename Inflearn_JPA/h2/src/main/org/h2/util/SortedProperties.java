@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -16,12 +16,12 @@ import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.Map.Entry;
 import java.util.Properties;
 import java.util.TreeMap;
+import java.util.Vector;
 import org.h2.store.fs.FileUtils;
 
 /**
@@ -34,12 +34,12 @@ public class SortedProperties extends Properties {
 
     @Override
     public synchronized Enumeration<Object> keys() {
-        ArrayList<Object> v = new ArrayList<>();
+        Vector<String> v = new Vector<>();
         for (Object o : keySet()) {
             v.add(o.toString());
         }
-        v.sort(null);
-        return Collections.enumeration(v);
+        Collections.sort(v);
+        return new Vector<Object>(v).elements();
     }
 
     /**
@@ -95,14 +95,13 @@ public class SortedProperties extends Properties {
      *
      * @param fileName the name of the properties file
      * @return the properties object
-     * @throws IOException on failure
      */
     public static synchronized SortedProperties loadProperties(String fileName)
             throws IOException {
         SortedProperties prop = new SortedProperties();
         if (FileUtils.exists(fileName)) {
             try (InputStream in = FileUtils.newInputStream(fileName)) {
-                prop.load(new InputStreamReader(in, StandardCharsets.ISO_8859_1));
+                prop.load(in);
             }
         }
         return prop;
@@ -112,7 +111,6 @@ public class SortedProperties extends Properties {
      * Store a properties file. The header and the date is not written.
      *
      * @param fileName the target file name
-     * @throws IOException on failure
      */
     public synchronized void store(String fileName) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -122,7 +120,7 @@ public class SortedProperties extends Properties {
         LineNumberReader r = new LineNumberReader(reader);
         Writer w;
         try {
-            w = new OutputStreamWriter(FileUtils.newOutputStream(fileName, false), StandardCharsets.ISO_8859_1);
+            w = new OutputStreamWriter(FileUtils.newOutputStream(fileName, false));
         } catch (Exception e) {
             throw new IOException(e.toString(), e);
         }

@@ -1,37 +1,36 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2017 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.command.dml;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 
 import org.h2.api.ErrorCode;
 import org.h2.api.Trigger;
 import org.h2.command.CommandInterface;
-import org.h2.command.query.AllColumnsForPlan;
+import org.h2.command.Prepared;
 import org.h2.engine.DbObject;
 import org.h2.engine.Right;
-import org.h2.engine.SessionLocal;
+import org.h2.engine.Session;
+import org.h2.engine.User;
 import org.h2.expression.Expression;
-import org.h2.expression.ExpressionVisitor;
-import org.h2.expression.Parameter;
-import org.h2.expression.ValueExpression;
+import org.h2.expression.ExpressionColumn;
+import org.h2.expression.condition.ConditionAndOr;
 import org.h2.message.DbException;
-import org.h2.result.LocalResult;
+import org.h2.result.ResultInterface;
 import org.h2.result.ResultTarget;
 import org.h2.result.Row;
+import org.h2.result.RowImpl;
 import org.h2.table.Column;
-import org.h2.table.DataChangeDeltaTable;
 import org.h2.table.DataChangeDeltaTable.ResultOption;
-import org.h2.table.PlanItem;
 import org.h2.table.Table;
 import org.h2.table.TableFilter;
-import org.h2.util.HasSQL;
 import org.h2.util.Utils;
+import org.h2.value.Value;
 
 /**
  * This class represents the statement syntax
@@ -39,12 +38,23 @@ import org.h2.util.Utils;
  *
  * It does not replace the MERGE INTO... KEYS... form.
  */
-public final class MergeUsing extends DataChangeStatement {
+public class MergeUsing extends Prepared implements DataChangeStatement {
+
+    // Merge fields
+
+    /**
+     * Target table.
+     */
+    Table targetTable;
 
     /**
      * Target table filter.
      */
     TableFilter targetTableFilter;
+
+    private Query query;
+
+    // MergeUsing fields
 
     /**
      * Source table filter.
@@ -57,106 +67,64 @@ public final class MergeUsing extends DataChangeStatement {
     Expression onCondition;
 
     private ArrayList<When> when = Utils.newSmallArrayList();
+    private String queryAlias;
+    private int countUpdatedRows;
+    private Select targetMatchQuery;
 
     /**
-     * Contains _ROWID_ of processed rows. Row
+     * Contains mappings between _ROWID_ and ROW_NUMBER for processed rows. Row
      * identities are remembered to prevent duplicate updates of the same row.
      */
-    private final HashSet<Long> targetRowidsRemembered = new HashSet<>();
+    private final HashMap<Value, Integer> targetRowidsRemembered = new HashMap<>();
+    private int sourceQueryRowNumber;
 
-    public MergeUsing(SessionLocal session, TableFilter targetTableFilter) {
+    public MergeUsing(Session session, TableFilter targetTableFilter) {
         super(session);
+        this.targetTable = targetTableFilter.getTable();
         this.targetTableFilter = targetTableFilter;
     }
 
     @Override
-    public long update(ResultTarget deltaChangeCollector, ResultOption deltaChangeCollectionMode) {
-        long countUpdatedRows = 0;
-        targetRowidsRemembered.clear();
-        checkRights();
-        setCurrentRowNumber(0);
-        sourceTableFilter.startQuery(session);
-        sourceTableFilter.reset();
-        Table table = targetTableFilter.getTable();
-        table.fire(session, evaluateTriggerMasks(), true);
-        table.lock(session, Table.WRITE_LOCK);
-        setCurrentRowNumber(0);
-        long count = 0;
-        Row previousSource = null, missedSource = null;
-        boolean hasRowId = table.getRowIdColumn() != null;
-        while (sourceTableFilter.next()) {
-            Row source = sourceTableFilter.get();
-            if (missedSource != null) {
-                if (source != missedSource) {
-                    Row backupTarget = targetTableFilter.get();
-                    sourceTableFilter.set(missedSource);
-                    targetTableFilter.set(table.getNullRow());
-                    countUpdatedRows += merge(true, deltaChangeCollector, deltaChangeCollectionMode);
-                    sourceTableFilter.set(source);
-                    targetTableFilter.set(backupTarget);
-                    count++;
-                }
-                missedSource = null;
-            }
-            setCurrentRowNumber(count + 1);
-            boolean nullRow = targetTableFilter.isNullRow();
-            if (!nullRow) {
-                Row targetRow = targetTableFilter.get();
-                if (table.isRowLockable()) {
-                    Row lockedRow = table.lockRow(session, targetRow);
-                    if (lockedRow == null) {
-                        if (previousSource != source) {
-                            missedSource = source;
-                        }
-                        continue;
-                    }
-                    if (!targetRow.hasSharedData(lockedRow)) {
-                        targetRow = lockedRow;
-                        targetTableFilter.set(targetRow);
-                        if (!onCondition.getBooleanValue(session)) {
-                            if (previousSource != source) {
-                                missedSource = source;
-                            }
-                            continue;
-                        }
-                    }
-                }
-                if (hasRowId) {
-                    long targetRowId = targetRow.getKey();
-                    if (!targetRowidsRemembered.add(targetRowId)) {
-                        throw DbException.get(ErrorCode.DUPLICATE_KEY_1,
-                                "Merge using ON column expression, " +
-                                "duplicate _ROWID_ target record already processed:_ROWID_="
-                                        + targetRowId + ":in:"
-                                        + targetTableFilter.getTable());
-                    }
-                }
-            }
-            countUpdatedRows += merge(nullRow, deltaChangeCollector, deltaChangeCollectionMode);
-            count++;
-            previousSource = source;
+    public void setDeltaChangeCollector(ResultTarget deltaChangeCollector, ResultOption deltaChangeCollectionMode) {
+        for (When w : when) {
+            w.setDeltaChangeCollector(deltaChangeCollector, deltaChangeCollectionMode);
         }
-        if (missedSource != null) {
-            sourceTableFilter.set(missedSource);
-            targetTableFilter.set(table.getNullRow());
-            countUpdatedRows += merge(true, deltaChangeCollector, deltaChangeCollectionMode);
-        }
-        targetRowidsRemembered.clear();
-        table.fire(session, evaluateTriggerMasks(), false);
-        return countUpdatedRows;
     }
 
-    private int merge(boolean nullRow, ResultTarget deltaChangeCollector, ResultOption deltaChangeCollectionMode) {
+    @Override
+    public int update() {
+        countUpdatedRows = 0;
+
+        // clear list of source table keys & rowids we have processed already
+        targetRowidsRemembered.clear();
+
+        targetTableFilter.startQuery(session);
+        targetTableFilter.reset();
+
+        sourceTableFilter.startQuery(session);
+        sourceTableFilter.reset();
+
+        sourceQueryRowNumber = 0;
+        checkRights();
+        setCurrentRowNumber(0);
         for (When w : when) {
-            if (w.getClass() == WhenNotMatched.class == nullRow) {
-                Expression condition = w.andCondition;
-                if (condition == null || condition.getBooleanValue(session)) {
-                    w.merge(session, deltaChangeCollector, deltaChangeCollectionMode);
-                    return 1;
-                }
-            }
+            w.reset();
         }
-        return 0;
+        // process source select query data for row creation
+        ResultInterface rows = query.query(0);
+        targetTable.fire(session, evaluateTriggerMasks(), true);
+        targetTable.lock(session, true, false);
+        while (rows.next()) {
+            sourceQueryRowNumber++;
+            Value[] sourceRowValues = rows.currentRow();
+            Row sourceRow = new RowImpl(sourceRowValues, 0);
+            setCurrentRowNumber(sourceQueryRowNumber);
+
+            merge(sourceRow);
+        }
+        rows.close();
+        targetTable.fire(session, evaluateTriggerMasks(), false);
+        return countUpdatedRows;
     }
 
     private int evaluateTriggerMasks() {
@@ -171,59 +139,99 @@ public final class MergeUsing extends DataChangeStatement {
         for (When w : when) {
             w.checkRights();
         }
-        session.getUser().checkTableRight(targetTableFilter.getTable(), Right.SELECT);
-        session.getUser().checkTableRight(sourceTableFilter.getTable(), Right.SELECT);
+        // check the underlying tables
+        session.getUser().checkRight(targetTable, Right.SELECT);
+        session.getUser().checkRight(sourceTableFilter.getTable(), Right.SELECT);
+    }
+
+    /**
+     * Merge the given row.
+     *
+     * @param sourceRow the row
+     */
+    protected void merge(Row sourceRow) {
+        // put the column values into the table filter
+        sourceTableFilter.set(sourceRow);
+        boolean found = isTargetRowFound();
+        for (When w : when) {
+            if (w.getClass() == WhenNotMatched.class ^ found) {
+                countUpdatedRows += w.merge();
+            }
+        }
+    }
+
+    private boolean isTargetRowFound() {
+        boolean matched = false;
+        try (ResultInterface rows = targetMatchQuery.query(0)) {
+            while (rows.next()) {
+                Value targetRowId = rows.currentRow()[0];
+                Integer number = targetRowidsRemembered.get(targetRowId);
+                // throw and exception if we have processed this _ROWID_ before...
+                if (number != null) {
+                    throw DbException.get(ErrorCode.DUPLICATE_KEY_1,
+                            "Merge using ON column expression, " +
+                            "duplicate _ROWID_ target record already updated, deleted or inserted:_ROWID_="
+                                    + targetRowId + ":in:"
+                                    + targetTableFilter.getTable()
+                                    + ":conflicting source row number:"
+                                    + number);
+                }
+                // remember the source column values we have used before (they
+                // are the effective ON clause keys
+                // and should not be repeated
+                targetRowidsRemembered.put(targetRowId, sourceQueryRowNumber);
+                matched = true;
+            }
+        }
+        return matched;
     }
 
     @Override
-    public String getPlanSQL(int sqlFlags) {
+    public String getPlanSQL(boolean alwaysQuote) {
         StringBuilder builder = new StringBuilder("MERGE INTO ");
-        targetTableFilter.getPlanSQL(builder, false, sqlFlags);
-        builder.append('\n').append("USING ");
-        sourceTableFilter.getPlanSQL(builder, false, sqlFlags);
-        for (When w : when) {
-            w.getSQL(builder.append('\n'), sqlFlags);
-        }
+        targetTable.getSQL(builder, alwaysQuote).append('\n').append("USING ").append(query.getPlanSQL(alwaysQuote));
+        // TODO add aliases and WHEN clauses to make plan SQL more like original SQL
         return builder.toString();
     }
 
     @Override
-    void doPrepare() {
+    public void prepare() {
         onCondition.addFilterConditions(sourceTableFilter);
         onCondition.addFilterConditions(targetTableFilter);
 
-        onCondition.mapColumns(sourceTableFilter, 0, Expression.MAP_INITIAL);
-        onCondition.mapColumns(targetTableFilter, 0, Expression.MAP_INITIAL);
+        onCondition.mapColumns(sourceTableFilter, 2, Expression.MAP_INITIAL);
+        onCondition.mapColumns(targetTableFilter, 1, Expression.MAP_INITIAL);
 
+        // only do the optimize now - before we have already gathered the
+        // unoptimized column data
         onCondition = onCondition.optimize(session);
-        // Create conditions only for target table
+        onCondition.createIndexConditions(session, sourceTableFilter);
         onCondition.createIndexConditions(session, targetTableFilter);
 
-        TableFilter[] filters = new TableFilter[] { sourceTableFilter, targetTableFilter };
-        sourceTableFilter.addJoin(targetTableFilter, true, onCondition);
-        PlanItem item = sourceTableFilter.getBestPlanItem(session, filters, 0, new AllColumnsForPlan(filters));
-        sourceTableFilter.setPlanItem(item);
-        sourceTableFilter.prepare();
+        query.prepare();
 
-        boolean hasFinalNotMatched = false, hasFinalMatched = false;
-        for (Iterator<When> i = when.iterator(); i.hasNext();) {
-            When w = i.next();
-            if (!w.prepare(session)) {
-                i.remove();
-            } else if (w.getClass() == WhenNotMatched.class) {
-                if (hasFinalNotMatched) {
-                    i.remove();
-                } else if (w.andCondition == null) {
-                    hasFinalNotMatched = true;
-                }
-            } else {
-                if (hasFinalMatched) {
-                    i.remove();
-                } else if (w.andCondition == null) {
-                    hasFinalMatched = true;
-                }
+        // Prepare each of the sub-commands ready to aid in the MERGE
+        // collaboration
+        targetTableFilter.doneWithIndexConditions();
+        boolean forUpdate = false;
+        for (When w : when) {
+            w.prepare();
+            if (w instanceof WhenNotMatched) {
+                forUpdate = true;
             }
         }
+
+        // setup the targetMatchQuery - for detecting if the target row exists
+        targetMatchQuery = new Select(session, null);
+        ArrayList<Expression> expressions = new ArrayList<>(1);
+        expressions.add(new ExpressionColumn(session.getDatabase(), targetTableFilter.getSchemaName(),
+                targetTableFilter.getTableAlias(), Column.ROWID, true));
+        targetMatchQuery.setExpressions(expressions);
+        targetMatchQuery.addTableFilter(targetTableFilter, true);
+        targetMatchQuery.addCondition(onCondition);
+        targetMatchQuery.setForUpdate(forUpdate);
+        targetMatchQuery.init();
+        targetMatchQuery.prepare();
     }
 
     public void setSourceTableFilter(TableFilter sourceTableFilter) {
@@ -255,6 +263,24 @@ public final class MergeUsing extends DataChangeStatement {
         when.add(w);
     }
 
+    public void setQueryAlias(String alias) {
+        this.queryAlias = alias;
+
+    }
+
+    public String getQueryAlias() {
+        return this.queryAlias;
+
+    }
+
+    public Query getQuery() {
+        return query;
+    }
+
+    public void setQuery(Query query) {
+        this.query = query;
+    }
+
     @Override
     public Table getTable() {
         return targetTableFilter.getTable();
@@ -268,7 +294,25 @@ public final class MergeUsing extends DataChangeStatement {
         return targetTableFilter;
     }
 
+    public Table getTargetTable() {
+        return targetTable;
+    }
+
+    public void setTargetTable(Table targetTable) {
+        this.targetTable = targetTable;
+    }
+
     // Prepared interface implementations
+
+    @Override
+    public boolean isTransactional() {
+        return true;
+    }
+
+    @Override
+    public ResultInterface queryMeta() {
+        return null;
+    }
 
     @Override
     public int getType() {
@@ -280,28 +324,51 @@ public final class MergeUsing extends DataChangeStatement {
         return "MERGE";
     }
 
+    /**
+     * Whether any of the "when" parts contain both an update and a delete part.
+     *
+     * @return the if one part does
+     */
+    public boolean hasCombinedMatchedClause() {
+        for (When w : when) {
+            if (w instanceof WhenMatched) {
+                WhenMatched whenMatched = (WhenMatched) w;
+                if (whenMatched.updateCommand != null && whenMatched.deleteCommand != null) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     @Override
     public void collectDependencies(HashSet<DbObject> dependencies) {
-        dependencies.add(targetTableFilter.getTable());
-        dependencies.add(sourceTableFilter.getTable());
-        ExpressionVisitor visitor = ExpressionVisitor.getDependenciesVisitor(dependencies);
         for (When w : when) {
-            w.collectDependencies(visitor);
+            w.collectDependencies(dependencies);
         }
-        onCondition.isEverything(visitor);
+        if (query != null) {
+            query.collectDependencies(dependencies);
+        }
+        targetMatchQuery.collectDependencies(dependencies);
     }
 
     /**
      * Abstract WHEN command of the MERGE statement.
      */
-    public abstract class When implements HasSQL {
+    public abstract static class When {
+
+        /**
+         * The parent MERGE statement.
+         */
+        final MergeUsing mergeUsing;
 
         /**
          * AND condition of the command.
          */
         Expression andCondition;
 
-        When() {
+        When(MergeUsing mergeUsing) {
+            this.mergeUsing = mergeUsing;
         }
 
         /**
@@ -314,39 +381,36 @@ public final class MergeUsing extends DataChangeStatement {
         }
 
         /**
-         * Merges rows.
-         *
-         * @param session
-         *            the session
-         * @param deltaChangeCollector
-         *            target result
-         * @param deltaChangeCollectionMode
-         *            collection mode
+         * Reset updated keys if needs.
          */
-        abstract void merge(SessionLocal session, ResultTarget deltaChangeCollector,
+        void reset() {
+            // Nothing to do
+        }
+
+        /**
+         * Where changes should be processed.
+         *
+         * @param deltaChangeCollector the collector
+         * @param deltaChangeCollectionMode the mode
+         */
+        abstract void setDeltaChangeCollector(ResultTarget deltaChangeCollector,
                 ResultOption deltaChangeCollectionMode);
 
         /**
-         * Prepares WHEN command.
+         * Merges rows.
          *
-         * @param session
-         *            the session
-         * @return {@code false} if this clause may be removed
+         * @return count of updated rows.
          */
-        boolean prepare(SessionLocal session) {
+        abstract int merge();
+
+        /**
+         * Prepares WHEN command.
+         */
+        void prepare() {
             if (andCondition != null) {
-                andCondition.mapColumns(targetTableFilter, 0, Expression.MAP_INITIAL);
-                andCondition.mapColumns(sourceTableFilter, 0, Expression.MAP_INITIAL);
-                andCondition = andCondition.optimize(session);
-                if (andCondition.isConstant()) {
-                    if (andCondition.getBooleanValue(session)) {
-                        andCondition = null;
-                    } else {
-                        return false;
-                    }
-                }
+                andCondition.mapColumns(mergeUsing.sourceTableFilter, 2, Expression.MAP_INITIAL);
+                andCondition.mapColumns(mergeUsing.targetTableFilter, 1, Expression.MAP_INITIAL);
             }
-            return true;
         }
 
         /**
@@ -364,180 +428,177 @@ public final class MergeUsing extends DataChangeStatement {
         /**
          * Find and collect all DbObjects, this When object depends on.
          *
-         * @param visitor the expression visitor
+         * @param dependencies collection of dependencies to populate
          */
-        void collectDependencies(ExpressionVisitor visitor) {
-            if (andCondition != null) {
-                andCondition.isEverything(visitor);
-            }
-        }
-
-        @Override
-        public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
-            builder.append("WHEN ");
-            if (getClass() == WhenNotMatched.class) {
-                builder.append("NOT ");
-            }
-            builder.append("MATCHED");
-            if (andCondition != null) {
-                andCondition.getUnenclosedSQL(builder.append(" AND "), sqlFlags);
-            }
-            return builder.append(" THEN ");
-        }
-
+        abstract void collectDependencies(HashSet<DbObject> dependencies);
     }
 
-    public final class WhenMatchedThenDelete extends When {
+    public static final class WhenMatched extends When {
+
+        /**
+         * The update command.
+         */
+        Update updateCommand;
+
+        /**
+         * The delete command.
+         */
+        Delete deleteCommand;
+
+        private final HashSet<Long> updatedKeys = new HashSet<>();
+
+        public WhenMatched(MergeUsing mergeUsing) {
+            super(mergeUsing);
+        }
+
+        public Prepared getUpdateCommand() {
+            return updateCommand;
+        }
+
+        public void setUpdateCommand(Update updateCommand) {
+            this.updateCommand = updateCommand;
+        }
+
+        public Prepared getDeleteCommand() {
+            return deleteCommand;
+        }
+
+        public void setDeleteCommand(Delete deleteCommand) {
+            this.deleteCommand = deleteCommand;
+        }
 
         @Override
-        void merge(SessionLocal session, ResultTarget deltaChangeCollector, ResultOption deltaChangeCollectionMode) {
-            TableFilter targetTableFilter = MergeUsing.this.targetTableFilter;
-            Table table = targetTableFilter.getTable();
-            Row row = targetTableFilter.get();
-            if (deltaChangeCollectionMode == ResultOption.OLD) {
-                deltaChangeCollector.addRow(row.getValueList());
+        void reset() {
+            updatedKeys.clear();
+        }
+
+        @Override
+        void setDeltaChangeCollector(ResultTarget deltaChangeCollector, ResultOption deltaChangeCollectionMode) {
+            if (updateCommand != null) {
+                updateCommand.setDeltaChangeCollector(deltaChangeCollector, deltaChangeCollectionMode);
             }
-            if (!table.fireRow() || !table.fireBeforeRow(session, row, null)) {
-                table.removeRow(session, row);
-                table.fireAfterRow(session, row, null, false);
+            if (deleteCommand != null) {
+                deleteCommand.setDeltaChangeCollector(deltaChangeCollector, deltaChangeCollectionMode);
+            }
+        }
+
+        @Override
+        int merge() {
+            int countUpdatedRows = 0;
+            if (updateCommand != null) {
+                countUpdatedRows += updateCommand.update();
+            }
+            // under oracle rules these updates & delete combinations are
+            // allowed together
+            if (deleteCommand != null) {
+                countUpdatedRows += deleteCommand.update();
+                updatedKeys.clear();
+            }
+            return countUpdatedRows;
+        }
+
+        @Override
+        void prepare() {
+            super.prepare();
+            if (updateCommand != null) {
+                updateCommand.setSourceTableFilter(mergeUsing.sourceTableFilter);
+                updateCommand.setCondition(appendCondition(updateCommand, mergeUsing.onCondition));
+                if (andCondition != null) {
+                    updateCommand.setCondition(appendCondition(updateCommand, andCondition));
+                }
+                updateCommand.prepare();
+            }
+            if (deleteCommand != null) {
+                deleteCommand.setSourceTableFilter(mergeUsing.sourceTableFilter);
+                deleteCommand.setCondition(appendCondition(deleteCommand, mergeUsing.onCondition));
+                if (andCondition != null) {
+                    deleteCommand.setCondition(appendCondition(deleteCommand, andCondition));
+                }
+                deleteCommand.prepare();
+                if (updateCommand != null) {
+                    updateCommand.setUpdatedKeysCollector(updatedKeys);
+                    deleteCommand.setKeysFilter(updatedKeys);
+                }
             }
         }
 
         @Override
         int evaluateTriggerMasks() {
-            return Trigger.DELETE;
+            int masks = 0;
+            if (updateCommand != null) {
+                masks |= Trigger.UPDATE;
+            }
+            if (deleteCommand != null) {
+                masks |= Trigger.DELETE;
+            }
+            return masks;
         }
 
         @Override
         void checkRights() {
-            getSession().getUser().checkTableRight(targetTableFilter.getTable(), Right.DELETE);
+            User user = mergeUsing.getSession().getUser();
+            if (updateCommand != null) {
+                user.checkRight(mergeUsing.targetTable, Right.UPDATE);
+            }
+            if (deleteCommand != null) {
+                user.checkRight(mergeUsing.targetTable, Right.DELETE);
+            }
         }
 
         @Override
-        public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
-            return super.getSQL(builder, sqlFlags).append("DELETE");
+        void collectDependencies(HashSet<DbObject> dependencies) {
+            if (updateCommand != null) {
+                updateCommand.collectDependencies(dependencies);
+            }
+            if (deleteCommand != null) {
+                deleteCommand.collectDependencies(dependencies);
+            }
+        }
+
+        private static Expression appendCondition(Update updateCommand, Expression condition) {
+            Expression c = updateCommand.getCondition();
+            return c == null ? condition : new ConditionAndOr(ConditionAndOr.AND, c, condition);
+        }
+
+        private static Expression appendCondition(Delete deleteCommand, Expression condition) {
+            Expression c = deleteCommand.getCondition();
+            return c == null ? condition : new ConditionAndOr(ConditionAndOr.AND, c, condition);
         }
 
     }
 
-    public final class WhenMatchedThenUpdate extends When {
+    public static final class WhenNotMatched extends When {
 
-        private SetClauseList setClauseList;
+        private Insert insertCommand;
 
-        public void setSetClauseList(SetClauseList setClauseList) {
-            this.setClauseList = setClauseList;
+        public WhenNotMatched(MergeUsing mergeUsing) {
+            super(mergeUsing);
+        }
+
+        public Insert getInsertCommand() {
+            return insertCommand;
+        }
+
+        public void setInsertCommand(Insert insertCommand) {
+            this.insertCommand = insertCommand;
         }
 
         @Override
-        void merge(SessionLocal session, ResultTarget deltaChangeCollector, ResultOption deltaChangeCollectionMode) {
-            TableFilter targetTableFilter = MergeUsing.this.targetTableFilter;
-            Table table = targetTableFilter.getTable();
-            try (LocalResult rows = LocalResult.forTable(session, table)) {
-                setClauseList.prepareUpdate(table, session, deltaChangeCollector, deltaChangeCollectionMode, rows,
-                        targetTableFilter.get(), false);
-                Update.doUpdate(MergeUsing.this, session, table, rows);
-            }
+        void setDeltaChangeCollector(ResultTarget deltaChangeCollector, ResultOption deltaChangeCollectionMode) {
+            insertCommand.setDeltaChangeCollector(deltaChangeCollector, deltaChangeCollectionMode);
         }
 
         @Override
-        boolean prepare(SessionLocal session) {
-            boolean result = super.prepare(session);
-            setClauseList.mapAndOptimize(session, targetTableFilter, sourceTableFilter);
-            return result;
+        int merge() {
+            return andCondition == null || andCondition.getBooleanValue(mergeUsing.getSession()) ?
+                    insertCommand.update() : 0;
         }
 
         @Override
-        int evaluateTriggerMasks() {
-            return Trigger.UPDATE;
-        }
-
-        @Override
-        void checkRights() {
-            getSession().getUser().checkTableRight(targetTableFilter.getTable(), Right.UPDATE);
-        }
-
-        @Override
-        void collectDependencies(ExpressionVisitor visitor) {
-            super.collectDependencies(visitor);
-            setClauseList.isEverything(visitor);
-        }
-
-        @Override
-        public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
-            return setClauseList.getSQL(super.getSQL(builder, sqlFlags).append("UPDATE"), sqlFlags);
-        }
-
-    }
-
-    public final class WhenNotMatched extends When {
-
-        private Column[] columns;
-
-        private final Boolean overridingSystem;
-
-        private final Expression[] values;
-
-        public WhenNotMatched(Column[] columns, Boolean overridingSystem, Expression[] values) {
-            this.columns = columns;
-            this.overridingSystem = overridingSystem;
-            this.values = values;
-        }
-
-        @Override
-        void merge(SessionLocal session, ResultTarget deltaChangeCollector, ResultOption deltaChangeCollectionMode) {
-            Table table = targetTableFilter.getTable();
-            Row newRow = table.getTemplateRow();
-            Expression[] expr = values;
-            for (int i = 0, len = columns.length; i < len; i++) {
-                Column c = columns[i];
-                int index = c.getColumnId();
-                Expression e = expr[i];
-                if (e != ValueExpression.DEFAULT) {
-                    try {
-                        newRow.setValue(index, e.getValue(session));
-                    } catch (DbException ex) {
-                        ex.addSQL("INSERT -- " + getSimpleSQL(expr));
-                        throw ex;
-                    }
-                }
-            }
-            table.convertInsertRow(session, newRow, overridingSystem);
-            if (deltaChangeCollectionMode == ResultOption.NEW) {
-                deltaChangeCollector.addRow(newRow.getValueList().clone());
-            }
-            if (!table.fireBeforeRow(session, null, newRow)) {
-                table.addRow(session, newRow);
-                DataChangeDeltaTable.collectInsertedFinalRow(session, table, deltaChangeCollector,
-                        deltaChangeCollectionMode, newRow);
-                table.fireAfterRow(session, null, newRow, false);
-            } else {
-                DataChangeDeltaTable.collectInsertedFinalRow(session, table, deltaChangeCollector,
-                        deltaChangeCollectionMode, newRow);
-            }
-        }
-
-        @Override
-        boolean prepare(SessionLocal session) {
-            boolean result = super.prepare(session);
-            TableFilter targetTableFilter = MergeUsing.this.targetTableFilter,
-                    sourceTableFilter = MergeUsing.this.sourceTableFilter;
-            if (columns == null) {
-                columns = targetTableFilter.getTable().getColumns();
-            }
-            if (values.length != columns.length) {
-                throw DbException.get(ErrorCode.COLUMN_COUNT_DOES_NOT_MATCH);
-            }
-            for (int i = 0, len = values.length; i < len; i++) {
-                Expression e = values[i];
-                e.mapColumns(targetTableFilter, 0, Expression.MAP_INITIAL);
-                e.mapColumns(sourceTableFilter, 0, Expression.MAP_INITIAL);
-                e = e.optimize(session);
-                if (e instanceof Parameter) {
-                    ((Parameter) e).setColumn(columns[i]);
-                }
-                values[i] = e;
-            }
-            return result;
+        void prepare() {
+            super.prepare();
+            insertCommand.setSourceTableFilter(mergeUsing.sourceTableFilter);
+            insertCommand.prepare();
         }
 
         @Override
@@ -547,24 +608,12 @@ public final class MergeUsing extends DataChangeStatement {
 
         @Override
         void checkRights() {
-            getSession().getUser().checkTableRight(targetTableFilter.getTable(), Right.INSERT);
+            mergeUsing.getSession().getUser().checkRight(mergeUsing.targetTable, Right.INSERT);
         }
 
         @Override
-        void collectDependencies(ExpressionVisitor visitor) {
-            super.collectDependencies(visitor);
-            for (Expression e : values) {
-                e.isEverything(visitor);
-            }
+        void collectDependencies(HashSet<DbObject> dependencies) {
+            insertCommand.collectDependencies(dependencies);
         }
-
-        @Override
-        public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
-            super.getSQL(builder, sqlFlags).append("INSERT (");
-            Column.writeColumns(builder, columns, sqlFlags).append(")\nVALUES (");
-            return Expression.writeExpressions(builder, values, sqlFlags).append(')');
-        }
-
     }
-
 }

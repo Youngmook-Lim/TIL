@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -458,6 +458,7 @@ public interface CommandInterface extends AutoCloseable {
      */
     int ALTER_TABLE_RENAME_CONSTRAINT = 85;
 
+
     /**
      * The type of an EXPLAIN ANALYZE statement.
      */
@@ -489,59 +490,6 @@ public interface CommandInterface extends AutoCloseable {
     int EXECUTE_IMMEDIATELY = 91;
 
     /**
-     * The type of ALTER DOMAIN ADD CONSTRAINT statement.
-     */
-    int ALTER_DOMAIN_ADD_CONSTRAINT = 92;
-
-    /**
-     * The type of ALTER DOMAIN DROP CONSTRAINT statement.
-     */
-    int ALTER_DOMAIN_DROP_CONSTRAINT = 93;
-
-    /**
-     * The type of an ALTER DOMAIN SET DEFAULT and ALTER DOMAIN DROP DEFAULT
-     * statements.
-     */
-    int ALTER_DOMAIN_DEFAULT = 94;
-
-    /**
-     * The type of an ALTER DOMAIN SET ON UPDATE and ALTER DOMAIN DROP ON UPDATE
-     * statements.
-     */
-    int ALTER_DOMAIN_ON_UPDATE = 95;
-
-    /**
-     * The type of an ALTER DOMAIN RENAME statement.
-     */
-    int ALTER_DOMAIN_RENAME = 96;
-
-    /**
-     * The type of a HELP statement.
-     */
-    int HELP = 97;
-
-    /**
-     * The type of an ALTER TABLE ALTER COLUMN DROP EXPRESSION statement.
-     */
-    int ALTER_TABLE_ALTER_COLUMN_DROP_EXPRESSION = 98;
-
-    /**
-     * The type of an ALTER TABLE ALTER COLUMN DROP IDENTITY statement.
-     */
-    int ALTER_TABLE_ALTER_COLUMN_DROP_IDENTITY = 99;
-
-    /**
-     * The type of ALTER TABLE ALTER COLUMN SET DEFAULT ON NULL and ALTER TABLE
-     * ALTER COLUMN DROP DEFAULT ON NULL statements.
-     */
-    int ALTER_TABLE_ALTER_COLUMN_DEFAULT_ON_NULL = 100;
-
-    /**
-     * The type of an ALTER DOMAIN RENAME CONSTRAINT statement.
-     */
-    int ALTER_DOMAIN_RENAME_CONSTRAINT = 101;
-
-    /**
      * Get command type.
      *
      * @return one of the constants above
@@ -569,7 +517,7 @@ public interface CommandInterface extends AutoCloseable {
      * @param scrollable if the result set must be scrollable
      * @return the result
      */
-    ResultInterface executeQuery(long maxRows, boolean scrollable);
+    ResultInterface executeQuery(int maxRows, boolean scrollable);
 
     /**
      * Execute the statement
@@ -607,5 +555,4 @@ public interface CommandInterface extends AutoCloseable {
      * @return the empty result
      */
     ResultInterface getMetaData();
-
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -8,7 +8,7 @@ package org.h2.command.ddl;
 import org.h2.api.ErrorCode;
 import org.h2.command.CommandInterface;
 import org.h2.engine.Database;
-import org.h2.engine.SessionLocal;
+import org.h2.engine.Session;
 import org.h2.message.DbException;
 import org.h2.schema.Constant;
 import org.h2.schema.Schema;
@@ -17,12 +17,12 @@ import org.h2.schema.Schema;
  * This class represents the statement
  * DROP CONSTANT
  */
-public class DropConstant extends SchemaOwnerCommand {
+public class DropConstant extends SchemaCommand {
 
     private String constantName;
     private boolean ifExists;
 
-    public DropConstant(SessionLocal session, Schema schema) {
+    public DropConstant(Session session, Schema schema) {
         super(session, schema);
     }
 
@@ -35,9 +35,11 @@ public class DropConstant extends SchemaOwnerCommand {
     }
 
     @Override
-    long update(Schema schema) {
+    public int update() {
+        session.getUser().checkAdmin();
+        session.commit(true);
         Database db = session.getDatabase();
-        Constant constant = schema.findConstant(constantName);
+        Constant constant = getSchema().findConstant(constantName);
         if (constant == null) {
             if (!ifExists) {
                 throw DbException.get(ErrorCode.CONSTANT_NOT_FOUND_1, constantName);

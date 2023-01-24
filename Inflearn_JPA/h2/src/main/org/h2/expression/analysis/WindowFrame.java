@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -11,7 +11,7 @@ import java.util.Iterator;
 import java.util.NoSuchElementException;
 
 import org.h2.api.ErrorCode;
-import org.h2.engine.SessionLocal;
+import org.h2.engine.Session;
 import org.h2.expression.BinaryOperation;
 import org.h2.expression.BinaryOperation.OpType;
 import org.h2.expression.Expression;
@@ -27,7 +27,7 @@ import org.h2.value.ValueNull;
  */
 public final class WindowFrame {
 
-    private abstract static class Itr implements Iterator<Value[]> {
+    private static abstract class Itr implements Iterator<Value[]> {
 
         final ArrayList<Value[]> orderedRows;
 
@@ -35,6 +35,11 @@ public final class WindowFrame {
 
         Itr(ArrayList<Value[]> orderedRows) {
             this.orderedRows = orderedRows;
+        }
+
+        @Override
+        public final void remove() {
+            throw new UnsupportedOperationException();
         }
 
     }
@@ -205,7 +210,7 @@ public final class WindowFrame {
      *            whether iterator should iterate in reverse order
      * @return iterator
      */
-    public static Iterator<Value[]> iterator(Window over, SessionLocal session, ArrayList<Value[]> orderedRows,
+    public static Iterator<Value[]> iterator(Window over, Session session, ArrayList<Value[]> orderedRows,
             SortOrder sortOrder, int currentRow, boolean reverse) {
         WindowFrame frame = over.getWindowFrame();
         if (frame != null) {
@@ -236,8 +241,8 @@ public final class WindowFrame {
      *             if over is not null and its exclusion clause is not EXCLUDE
      *             NO OTHERS
      */
-    public static int getEndIndex(Window over, SessionLocal session, ArrayList<Value[]> orderedRows,
-            SortOrder sortOrder, int currentRow) {
+    public static int getEndIndex(Window over, Session session, ArrayList<Value[]> orderedRows, SortOrder sortOrder,
+            int currentRow) {
         WindowFrame frame = over.getWindowFrame();
         if (frame != null) {
             return frame.getEndIndex(session, orderedRows, sortOrder, currentRow);
@@ -284,10 +289,10 @@ public final class WindowFrame {
         return offset;
     }
 
-    private static int getIntOffset(WindowFrameBound bound, Value[] values, SessionLocal session) {
+    private static int getIntOffset(WindowFrameBound bound, Value[] values, Session session) {
         Value v = bound.isVariable() ? values[bound.getExpressionIndex()] : bound.getValue().getValue(session);
-        int value;
-        if (v == ValueNull.INSTANCE || (value = v.getInt()) < 0) {
+        int value = v.getInt();
+        if (v == ValueNull.INSTANCE || value < 0) {
             throw DbException.get(ErrorCode.INVALID_PRECEDING_OR_FOLLOWING_1, v.getTraceSQL());
         }
         return value;
@@ -312,7 +317,7 @@ public final class WindowFrame {
      * @return row for comparison operations, or null if result is out of range
      *         and should be treated as UNLIMITED
      */
-    private static Value[] getCompareRow(SessionLocal session, ArrayList<Value[]> orderedRows, SortOrder sortOrder,
+    private static Value[] getCompareRow(Session session, ArrayList<Value[]> orderedRows, SortOrder sortOrder,
             int currentRow, WindowFrameBound bound, boolean add) {
         int sortIndex = sortOrder.getQueryColumnIndexes()[0];
         Value[] row = orderedRows.get(currentRow);
@@ -324,14 +329,13 @@ public final class WindowFrame {
         case Value.NULL:
             newValue = ValueNull.INSTANCE;
             break;
-        case Value.TINYINT:
-        case Value.SMALLINT:
-        case Value.INTEGER:
-        case Value.BIGINT:
-        case Value.NUMERIC:
-        case Value.REAL:
+        case Value.BYTE:
+        case Value.SHORT:
+        case Value.INT:
+        case Value.LONG:
+        case Value.DECIMAL:
         case Value.DOUBLE:
-        case Value.DECFLOAT:
+        case Value.FLOAT:
         case Value.TIME:
         case Value.TIME_TZ:
         case Value.DATE:
@@ -373,7 +377,7 @@ public final class WindowFrame {
         return newRow;
     }
 
-    private static Value getValueOffset(WindowFrameBound bound, Value[] values, SessionLocal session) {
+    private static Value getValueOffset(WindowFrameBound bound, Value[] values, Session session) {
         Value value = bound.isVariable() ? values[bound.getExpressionIndex()] : bound.getValue().getValue(session);
         if (value == ValueNull.INSTANCE || value.getSignum() < 0) {
             throw DbException.get(ErrorCode.INVALID_PRECEDING_OR_FOLLOWING_1, value.getTraceSQL());
@@ -454,7 +458,7 @@ public final class WindowFrame {
 
     /**
      * Check if bounds of this frame has variable expressions. This method may
-     * be used only after {@link #optimize(SessionLocal)} invocation.
+     * be used only after {@link #optimize(Session)} invocation.
      *
      * @return if bounds of this frame has variable expressions
      */
@@ -491,7 +495,7 @@ public final class WindowFrame {
      * @param session
      *            the session
      */
-    void optimize(SessionLocal session) {
+    void optimize(Session session) {
         starting.optimize(session);
         if (following != null) {
             following.optimize(session);
@@ -505,9 +509,9 @@ public final class WindowFrame {
      *            the session
      * @param stage
      *            select stage
-     * @see Expression#updateAggregate(SessionLocal, int)
+     * @see Expression#updateAggregate(Session, int)
      */
-    void updateAggregate(SessionLocal session, int stage) {
+    void updateAggregate(Session session, int stage) {
         starting.updateAggregate(session, stage);
         if (following != null) {
             following.updateAggregate(session, stage);
@@ -529,7 +533,7 @@ public final class WindowFrame {
      *            whether iterator should iterate in reverse order
      * @return iterator
      */
-    public Iterator<Value[]> iterator(SessionLocal session, ArrayList<Value[]> orderedRows, SortOrder sortOrder,
+    public Iterator<Value[]> iterator(Session session, ArrayList<Value[]> orderedRows, SortOrder sortOrder,
             int currentRow, boolean reverse) {
         int startIndex = getIndex(session, orderedRows, sortOrder, currentRow, starting, false);
         int endIndex = following != null ? getIndex(session, orderedRows, sortOrder, currentRow, following, true)
@@ -568,8 +572,7 @@ public final class WindowFrame {
      * @throws UnsupportedOperationException
      *             if exclusion clause is not EXCLUDE NO OTHERS
      */
-    public int getStartIndex(SessionLocal session, ArrayList<Value[]> orderedRows, SortOrder sortOrder, //
-            int currentRow) {
+    public int getStartIndex(Session session, ArrayList<Value[]> orderedRows, SortOrder sortOrder, int currentRow) {
         if (exclusion != WindowFrameExclusion.EXCLUDE_NO_OTHERS) {
             throw new UnsupportedOperationException();
         }
@@ -595,8 +598,7 @@ public final class WindowFrame {
      * @throws UnsupportedOperationException
      *             if exclusion clause is not EXCLUDE NO OTHERS
      */
-    private int getEndIndex(SessionLocal session, ArrayList<Value[]> orderedRows, SortOrder sortOrder, //
-            int currentRow) {
+    private int getEndIndex(Session session, ArrayList<Value[]> orderedRows, SortOrder sortOrder, int currentRow) {
         if (exclusion != WindowFrameExclusion.EXCLUDE_NO_OTHERS) {
             throw new UnsupportedOperationException();
         }
@@ -629,7 +631,7 @@ public final class WindowFrame {
      *         or be equal to the number of rows if frame is not limited from
      *         that side
      */
-    private int getIndex(SessionLocal session, ArrayList<Value[]> orderedRows, SortOrder sortOrder, int currentRow,
+    private int getIndex(Session session, ArrayList<Value[]> orderedRows, SortOrder sortOrder, int currentRow,
             WindowFrameBound bound, boolean forFollowing) {
         int size = orderedRows.size();
         int last = size - 1;
@@ -853,20 +855,20 @@ public final class WindowFrame {
      *
      * @param builder
      *            string builder
-     * @param formattingFlags
+     * @param alwaysQuote
      *            quote all identifiers
      * @return the specified string builder
-     * @see org.h2.expression.Expression#getSQL(StringBuilder, int, int)
+     * @see org.h2.expression.Expression#getSQL(StringBuilder, boolean)
      */
-    public StringBuilder getSQL(StringBuilder builder, int formattingFlags) {
+    public StringBuilder getSQL(StringBuilder builder, boolean alwaysQuote) {
         builder.append(units.getSQL());
         if (following == null) {
             builder.append(' ');
-            starting.getSQL(builder, false, formattingFlags);
+            starting.getSQL(builder, false, alwaysQuote);
         } else {
             builder.append(" BETWEEN ");
-            starting.getSQL(builder, false, formattingFlags).append(" AND ");
-            following.getSQL(builder, true, formattingFlags);
+            starting.getSQL(builder, false, alwaysQuote).append(" AND ");
+            following.getSQL(builder, true, alwaysQuote);
         }
         if (exclusion != WindowFrameExclusion.EXCLUDE_NO_OTHERS) {
             builder.append(' ').append(exclusion.getSQL());

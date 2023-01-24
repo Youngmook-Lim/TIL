@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -29,17 +29,42 @@ public class TestJsonUtils extends TestBase {
     private static final Charset[] CHARSETS = { StandardCharsets.UTF_8, StandardCharsets.UTF_16BE,
             StandardCharsets.UTF_16LE, Charset.forName("UTF-32BE"), Charset.forName("UTF-32LE") };
 
-    private static final Callable<JSONTarget<?>> STRING_TARGET = () -> new JSONStringTarget();
+    private static final Callable<JSONTarget<?>> STRING_TARGET = new Callable<JSONTarget<?>>() {
+        @Override
+        public JSONTarget<?> call() throws Exception {
+            return new JSONStringTarget();
+        }
+    };
 
-    private static final Callable<JSONTarget<?>> BYTES_TARGET = () -> new JSONByteArrayTarget();
+    private static final Callable<JSONTarget<?>> BYTES_TARGET = new Callable<JSONTarget<?>>() {
+        @Override
+        public JSONTarget<?> call() throws Exception {
+            return new JSONByteArrayTarget();
+        }
+    };
 
-    private static final Callable<JSONTarget<?>> VALUE_TARGET = () -> new JSONValueTarget();
+    private static final Callable<JSONTarget<?>> VALUE_TARGET = new Callable<JSONTarget<?>>() {
+        @Override
+        public JSONTarget<?> call() throws Exception {
+            return new JSONValueTarget();
+        }
+    };
 
     private static final Callable<JSONTarget<?>> JSON_VALIDATION_TARGET_WITHOUT_UNIQUE_KEYS = //
-            () -> new JSONValidationTargetWithoutUniqueKeys();
+            new Callable<JSONTarget<?>>() {
+                @Override
+                public JSONTarget<?> call() throws Exception {
+                    return new JSONValidationTargetWithoutUniqueKeys();
+                }
+            };
 
     private static final Callable<JSONTarget<?>> JSON_VALIDATION_TARGET_WITH_UNIQUE_KEYS = //
-            () -> new JSONValidationTargetWithUniqueKeys();
+            new Callable<JSONTarget<?>>() {
+                @Override
+                public JSONTarget<?> call() throws Exception {
+                    return new JSONValidationTargetWithUniqueKeys();
+                }
+            };
 
     /**
      * Run just this test.
@@ -48,7 +73,7 @@ public class TestJsonUtils extends TestBase {
      *            ignored
      */
     public static void main(String... a) throws Exception {
-        TestBase.createCaller().init().testFromMain();
+        TestBase.createCaller().init().test();
     }
 
     @Override
@@ -68,65 +93,143 @@ public class TestJsonUtils extends TestBase {
         testTargetErrorDetection(JSON_VALIDATION_TARGET_WITH_UNIQUE_KEYS);
     }
 
-    private void testTargetErrorDetection(Callable<JSONTarget<?>> constructor) throws Exception {
-        assertThrows(RuntimeException.class, () -> constructor.call().endObject());
-        assertThrows(RuntimeException.class, () -> constructor.call().endArray());
+    private void testTargetErrorDetection(final Callable<JSONTarget<?>> constructor) throws Exception {
+        JSONTarget<?> target;
+        // Unexpected end of object or array
+        target = constructor.call();
+        try {
+            target.endObject();
+            fail();
+        } catch (RuntimeException expected) {
+        }
+        target = constructor.call();
+        try {
+            target.endArray();
+            fail();
+        } catch (RuntimeException expected) {
+        }
         // Unexpected member without object
-        assertThrows(RuntimeException.class, () -> constructor.call().member("1"));
+        target = constructor.call();
+        try {
+            target.member("1");
+            fail();
+        } catch (RuntimeException expected) {
+        }
         // Unexpected member inside array
-        JSONTarget<?> target1 = constructor.call();
-        target1.startArray();
-        assertThrows(RuntimeException.class, () -> target1.member("1"));
+        target = constructor.call();
+        target.startArray();
+        try {
+            target.member("1");
+            fail();
+        } catch (RuntimeException expected) {
+        }
         // Unexpected member without value
-        JSONTarget<?> target2 = constructor.call();
-        target2.startObject();
-        target2.member("1");
-        assertThrows(RuntimeException.class, () -> target2.member("2"));
-        JSONTarget<?> target3 = constructor.call();
-        target3.startObject();
-        target3.member("1");
-        assertThrows(RuntimeException.class, () -> target3.endObject());
+        target = constructor.call();
+        target.startObject();
+        target.member("1");
+        try {
+            target.member("2");
+            fail();
+        } catch (RuntimeException expected) {
+        }
+        target = constructor.call();
+        target.startObject();
+        target.member("1");
+        try {
+            target.endObject();
+            fail();
+        } catch (RuntimeException expected) {
+        }
         // Unexpected value without member name
-        testJsonStringTargetErrorDetectionAllValues(() -> {
-            JSONTarget<?> target = constructor.call();
-            target.startObject();
-            return target;
+        testJsonStringTargetErrorDetectionAllValues(new Callable<JSONTarget<?>>() {
+            @Override
+            public JSONTarget<?> call() throws Exception {
+                JSONTarget<?> target = constructor.call();
+                target.startObject();
+                return target;
+            }
         });
         // Unexpected second value
-        testJsonStringTargetErrorDetectionAllValues(() -> {
-            JSONTarget<?> target = constructor.call();
-            target.valueNull();
-            return target;
+        testJsonStringTargetErrorDetectionAllValues(new Callable<JSONTarget<?>>() {
+            @Override
+            public JSONTarget<?> call() throws Exception {
+                JSONTarget<?> target = constructor.call();
+                target.valueNull();
+                return target;
+            }
         });
         // No value
-        assertIncomplete(constructor.call());
+        target = constructor.call();
+        try {
+            target.getResult();
+            fail();
+        } catch (RuntimeException expected) {
+        }
         // Unclosed object
-        JSONTarget<?> target = constructor.call();
+        target = constructor.call();
         target.startObject();
-        assertIncomplete(target);
+        try {
+            target.getResult();
+            fail();
+        } catch (RuntimeException expected) {
+        }
         // Unclosed array
         target = constructor.call();
         target.startObject();
-        assertIncomplete(target);
+        try {
+            target.getResult();
+            fail();
+        } catch (RuntimeException expected) {
+        }
         // End of array after start of object or vice versa
-        JSONTarget<?> target6 = constructor.call();
-        target6.startObject();
-        assertThrows(RuntimeException.class, () -> target6.endArray());
-        JSONTarget<?> target7 = constructor.call();
-        target7.startArray();
-        assertThrows(RuntimeException.class, () -> target7.endObject());
-    }
-
-    private void assertIncomplete(JSONTarget<?> target) {
-        assertThrows(RuntimeException.class, () -> target.getResult());
+        target = constructor.call();
+        target.startObject();
+        try {
+            target.endArray();
+            fail();
+        } catch (RuntimeException expected) {
+        }
+        target = constructor.call();
+        target.startArray();
+        try {
+            target.endObject();
+            fail();
+        } catch (RuntimeException expected) {
+        }
     }
 
     private void testJsonStringTargetErrorDetectionAllValues(Callable<JSONTarget<?>> initializer) throws Exception {
-        assertThrows(RuntimeException.class, () -> initializer.call().valueNull());
-        assertThrows(RuntimeException.class, () -> initializer.call().valueFalse());
-        assertThrows(RuntimeException.class, () -> initializer.call().valueTrue());
-        assertThrows(RuntimeException.class, () -> initializer.call().valueNumber(BigDecimal.ONE));
-        assertThrows(RuntimeException.class, () -> initializer.call().valueString("string"));
+        JSONTarget<?> target;
+        target = initializer.call();
+        try {
+            target.valueNull();
+            fail();
+        } catch (RuntimeException expected) {
+        }
+        target = initializer.call();
+        try {
+            target.valueFalse();
+            fail();
+        } catch (RuntimeException expected) {
+        }
+        target = initializer.call();
+        try {
+            target.valueTrue();
+            fail();
+        } catch (RuntimeException expected) {
+        }
+        target = initializer.call();
+        try {
+            target.valueNumber(BigDecimal.ONE);
+            fail();
+        } catch (RuntimeException expected) {
+        }
+        target = initializer.call();
+        try {
+            target.valueString("string");
+            fail();
+        } catch (RuntimeException expected) {
+        }
     }
 
     private void testSourcesAndTargets() throws Exception {
@@ -307,8 +410,13 @@ public class TestJsonUtils extends TestBase {
     }
 
     private void testUtfError(byte[] bytes) {
-        assertThrows(IllegalArgumentException.class,
-                () -> JSONBytesSource.parse(bytes, new JSONValidationTargetWithoutUniqueKeys()));
+        try {
+            JSONBytesSource.parse(bytes, new JSONValidationTargetWithoutUniqueKeys());
+        } catch (IllegalArgumentException expected) {
+            // Expected
+            return;
+        }
+        fail();
     }
 
     private void testLongNesting() {

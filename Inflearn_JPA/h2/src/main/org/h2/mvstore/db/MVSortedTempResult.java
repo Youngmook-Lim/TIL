@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -14,14 +14,9 @@ import org.h2.message.DbException;
 import org.h2.mvstore.Cursor;
 import org.h2.mvstore.MVMap;
 import org.h2.mvstore.MVMap.Builder;
-import org.h2.mvstore.type.DataType;
-import org.h2.mvstore.type.LongDataType;
 import org.h2.result.ResultExternal;
-import org.h2.result.RowFactory.DefaultRowFactory;
 import org.h2.result.SortOrder;
-import org.h2.value.TypeInfo;
 import org.h2.value.Value;
-import org.h2.value.ValueNull;
 import org.h2.value.ValueRow;
 
 /**
@@ -61,7 +56,7 @@ class MVSortedTempResult extends MVTempResult {
      * {@link #contains(Value[])} method is invoked. Only the root result should
      * have an index if required.
      */
-    private MVMap<ValueRow, Value> index;
+    private MVMap<ValueRow, Object> index;
 
     /**
      * Used for DISTINCT ON in presence of ORDER BY.
@@ -178,49 +173,17 @@ class MVSortedTempResult extends MVTempResult {
             indexes = null;
         }
         this.indexes = indexes;
-        ValueDataType keyType = new ValueDataType(database, SortOrder.addNullOrdering(database, sortTypes));
-        if (indexes != null) {
-            int l = indexes.length;
-            TypeInfo[] types = new TypeInfo[l];
-            for (int i = 0; i < l; i++) {
-                types[i] = expressions[indexes[i]].getType();
-            }
-            keyType.setRowFactory(DefaultRowFactory.INSTANCE.createRowFactory(database, database.getCompareMode(),
-                    database, types, null, false));
-        } else {
-            keyType.setRowFactory(DefaultRowFactory.INSTANCE.createRowFactory(database, database.getCompareMode(),
-                    database, expressions, null, false));
-        }
-        Builder<ValueRow, Long> builder = new MVMap.Builder<ValueRow, Long>().keyType(keyType)
-                .valueType(LongDataType.INSTANCE);
+        ValueDataType keyType = new ValueDataType(database, sortTypes);
+        Builder<ValueRow, Long> builder = new MVMap.Builder<ValueRow, Long>().keyType(keyType);
         map = store.openMap("tmp", builder);
         if (distinct && resultColumnCount != visibleColumnCount || distinctIndexes != null) {
-            int count;
-            TypeInfo[] types;
-            if (distinctIndexes != null) {
-                count = distinctIndexes.length;
-                types = new TypeInfo[count];
-                for (int i = 0; i < count; i++) {
-                    types[i] = expressions[distinctIndexes[i]].getType();
-                }
-            } else {
-                count = visibleColumnCount;
-                types = new TypeInfo[count];
-                for (int i = 0; i < count; i++) {
-                    types[i] = expressions[i].getType();
-                }
-            }
+            int count = distinctIndexes != null ? distinctIndexes.length : visibleColumnCount;
             ValueDataType distinctType = new ValueDataType(database, new int[count]);
-            distinctType.setRowFactory(DefaultRowFactory.INSTANCE.createRowFactory(database, database.getCompareMode(),
-                    database, types, null, false));
-            DataType<Value> distinctValueType;
+            Builder<ValueRow, Object> indexBuilder = new MVMap.Builder<ValueRow, Object>().keyType(distinctType);
             if (distinctIndexes != null && sort != null) {
-                distinctValueType = orderedDistinctOnType = keyType;
-            } else {
-                distinctValueType = NullValueDataType.INSTANCE;
+                indexBuilder.valueType(keyType);
+                orderedDistinctOnType = keyType;
             }
-            Builder<ValueRow, Value> indexBuilder = new MVMap.Builder<ValueRow, Value>().keyType(distinctType)
-                    .valueType(distinctValueType);
             index = store.openMap("idx", indexBuilder);
         }
     }
@@ -238,7 +201,7 @@ class MVSortedTempResult extends MVTempResult {
                 }
                 ValueRow distinctRow = ValueRow.get(newValues);
                 if (orderedDistinctOnType == null) {
-                    if (index.putIfAbsent(distinctRow, ValueNull.INSTANCE) != null) {
+                    if (index.putIfAbsent(distinctRow, true) != null) {
                         return rowCount;
                     }
                 } else {
@@ -255,7 +218,7 @@ class MVSortedTempResult extends MVTempResult {
                 }
             } else if (visibleColumnCount != resultColumnCount) {
                 ValueRow distinctRow = ValueRow.get(Arrays.copyOf(values, visibleColumnCount));
-                if (index.putIfAbsent(distinctRow, ValueNull.INSTANCE) != null) {
+                if (index.putIfAbsent(distinctRow, true) != null) {
                     return rowCount;
                 }
             }
@@ -358,6 +321,9 @@ class MVSortedTempResult extends MVTempResult {
         }
         // Read the next row
         current = getValue(cursor.next().getList());
+        if (hasEnum) {
+            fixEnum(current);
+        }
         /*
          * If valueCount is greater than 1 that is possible for non-distinct results the
          * following invocations of next() will use this.current and this.valueCount.

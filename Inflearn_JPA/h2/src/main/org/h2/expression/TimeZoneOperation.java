@@ -1,12 +1,14 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.expression;
 
-import org.h2.engine.SessionLocal;
+import org.h2.engine.Session;
 import org.h2.message.DbException;
+import org.h2.table.ColumnResolver;
+import org.h2.table.TableFilter;
 import org.h2.util.DateTimeUtils;
 import org.h2.util.TimeZoneProvider;
 import org.h2.value.DataType;
@@ -21,29 +23,38 @@ import org.h2.value.ValueTimestampTimeZone;
 /**
  * A time zone specification (AT { TIME ZONE | LOCAL }).
  */
-public final class TimeZoneOperation extends Operation1_2 {
+public class TimeZoneOperation extends Expression {
 
-    public TimeZoneOperation(Expression left, Expression right) {
-        super(left, right);
+    private Expression arg;
+    private Expression timeZone;
+    private TypeInfo type;
+
+    public TimeZoneOperation(Expression arg) {
+        this.arg = arg;
+    }
+
+    public TimeZoneOperation(Expression arg, Expression timeZone) {
+        this.arg = arg;
+        this.timeZone = timeZone;
     }
 
     @Override
-    public StringBuilder getUnenclosedSQL(StringBuilder builder, int sqlFlags) {
-        left.getSQL(builder, sqlFlags, AUTO_PARENTHESES).append(" AT ");
-        if (right != null) {
-            right.getSQL(builder.append("TIME ZONE "), sqlFlags, AUTO_PARENTHESES);
+    public StringBuilder getSQL(StringBuilder builder, boolean alwaysQuote) {
+        arg.getSQL(builder.append('('), alwaysQuote).append(" AT ");
+        if (timeZone != null) {
+            timeZone.getSQL(builder.append("TIME ZONE "), alwaysQuote);
         } else {
             builder.append("LOCAL");
         }
-        return builder;
+        return builder.append(')');
     }
 
     @Override
-    public Value getValue(SessionLocal session) {
-        Value a = left.getValue(session).convertTo(type, session);
+    public Value getValue(Session session) {
+        Value a = arg.getValue(session).convertTo(type, session, false, null);
         int valueType = a.getValueType();
-        if ((valueType == Value.TIMESTAMP_TZ || valueType == Value.TIME_TZ) && right != null) {
-            Value b = right.getValue(session);
+        if ((valueType == Value.TIMESTAMP_TZ || valueType == Value.TIME_TZ) && timeZone != null) {
+            Value b = timeZone.getValue(session);
             if (b != ValueNull.INSTANCE) {
                 if (valueType == Value.TIMESTAMP_TZ) {
                     ValueTimestampTimeZone v = (ValueTimestampTimeZone) a;
@@ -52,7 +63,24 @@ public final class TimeZoneOperation extends Operation1_2 {
                     int offsetSeconds = v.getTimeZoneOffsetSeconds();
                     int newOffset = parseTimeZone(b, dateValue, timeNanos, offsetSeconds, true);
                     if (offsetSeconds != newOffset) {
-                        a = DateTimeUtils.timestampTimeZoneAtOffset(dateValue, timeNanos, offsetSeconds, newOffset);
+                        timeNanos += (newOffset - offsetSeconds) * DateTimeUtils.NANOS_PER_SECOND;
+                        // Value can be 18+18 hours before or after the limit
+                        if (timeNanos < 0) {
+                            timeNanos += DateTimeUtils.NANOS_PER_DAY;
+                            dateValue = DateTimeUtils.decrementDateValue(dateValue);
+                            if (timeNanos < 0) {
+                                timeNanos += DateTimeUtils.NANOS_PER_DAY;
+                                dateValue = DateTimeUtils.decrementDateValue(dateValue);
+                            }
+                        } else if (timeNanos >= DateTimeUtils.NANOS_PER_DAY) {
+                            timeNanos -= DateTimeUtils.NANOS_PER_DAY;
+                            dateValue = DateTimeUtils.incrementDateValue(dateValue);
+                            if (timeNanos >= DateTimeUtils.NANOS_PER_DAY) {
+                                timeNanos -= DateTimeUtils.NANOS_PER_DAY;
+                                dateValue = DateTimeUtils.incrementDateValue(dateValue);
+                            }
+                        }
+                        a = ValueTimestampTimeZone.fromDateValueAndNanos(dateValue, timeNanos, newOffset);
                     }
                 } else {
                     ValueTimeTimeZone v = (ValueTimeTimeZone) a;
@@ -73,32 +101,36 @@ public final class TimeZoneOperation extends Operation1_2 {
 
     private static int parseTimeZone(Value b, long dateValue, long timeNanos, int offsetSeconds,
             boolean allowTimeZoneName) {
-        if (DataType.isCharacterStringType(b.getValueType())) {
-            TimeZoneProvider timeZone;
-            try {
-                timeZone = TimeZoneProvider.ofId(b.getString());
-            } catch (RuntimeException ex) {
-                throw DbException.getInvalidValueException("time zone", b.getTraceSQL());
+        int timeZoneType = b.getValueType();
+        if (DataType.isStringType(timeZoneType)) {
+            String s = b.getString();
+            if (s.equals("Z") || s.equals("UTC") || s.equals("GMT")) {
+                return 0;
+            } else if (!s.isEmpty()) {
+                char c = s.charAt(0);
+                if (c != '+' && c != '-' && (c < '0' || c > '9')) {
+                    TimeZoneProvider timeZone;
+                    try {
+                        timeZone = TimeZoneProvider.ofId(s);
+                    } catch (IllegalArgumentException ex) {
+                        throw DbException.getInvalidValueException("time zone", b.getSQL());
+                    }
+                    if (!allowTimeZoneName && !timeZone.hasFixedOffset()) {
+                        throw DbException.getInvalidValueException("time zone", b.getSQL());
+                    }
+                    return timeZone
+                            .getTimeZoneOffsetUTC(DateTimeUtils.getEpochSeconds(dateValue, timeNanos, offsetSeconds));
+                }
             }
-            if (!allowTimeZoneName && !timeZone.hasFixedOffset()) {
-                throw DbException.getInvalidValueException("time zone", b.getTraceSQL());
-            }
-            return timeZone.getTimeZoneOffsetUTC(DateTimeUtils.getEpochSeconds(dateValue, timeNanos, offsetSeconds));
         }
         return parseInterval(b);
     }
 
-    /**
-     * Parses a daytime interval as time zone offset.
-     *
-     * @param interval the interval
-     * @return the time zone offset in seconds
-     */
-    public static int parseInterval(Value interval) {
-        ValueInterval i = (ValueInterval) interval.convertTo(TypeInfo.TYPE_INTERVAL_HOUR_TO_SECOND);
+    private static int parseInterval(Value b) {
+        ValueInterval i = (ValueInterval) b.convertTo(Value.INTERVAL_HOUR_TO_SECOND);
         long h = i.getLeading(), seconds = i.getRemaining();
         if (h > 18 || h == 18 && seconds != 0 || seconds % DateTimeUtils.NANOS_PER_SECOND != 0) {
-            throw DbException.getInvalidValueException("time zone", i.getTraceSQL());
+            throw DbException.getInvalidValueException("time zone", i.getSQL());
         }
         int newOffset = (int) (h * 3_600 + seconds / DateTimeUtils.NANOS_PER_SECOND);
         if (i.isNegative()) {
@@ -108,12 +140,20 @@ public final class TimeZoneOperation extends Operation1_2 {
     }
 
     @Override
-    public Expression optimize(SessionLocal session) {
-        left = left.optimize(session);
-        if (right != null) {
-            right = right.optimize(session);
+    public void mapColumns(ColumnResolver resolver, int level, int state) {
+        arg.mapColumns(resolver, level, state);
+        if (timeZone != null) {
+            timeZone.mapColumns(resolver, level, state);
         }
-        TypeInfo type = left.getType();
+    }
+
+    @Override
+    public Expression optimize(Session session) {
+        arg = arg.optimize(session);
+        if (timeZone != null) {
+            timeZone = timeZone.optimize(session);
+        }
+        TypeInfo type = arg.getType();
         int valueType = Value.TIMESTAMP_TZ, scale = ValueTimestamp.MAXIMUM_SCALE;
         switch (type.getValueType()) {
         case Value.TIMESTAMP:
@@ -126,21 +166,72 @@ public final class TimeZoneOperation extends Operation1_2 {
             scale = type.getScale();
             break;
         default:
-            StringBuilder builder = left.getSQL(new StringBuilder(), TRACE_SQL_FLAGS, AUTO_PARENTHESES);
+            StringBuilder builder = arg.getSQL(new StringBuilder(), false);
             int offset = builder.length();
             builder.append(" AT ");
-            if (right != null) {
-                right.getSQL(builder.append("TIME ZONE "), TRACE_SQL_FLAGS, AUTO_PARENTHESES);
+            if (timeZone != null) {
+                timeZone.getSQL(builder.append("TIME ZONE "), false);
             } else {
                 builder.append("LOCAL");
             }
             throw DbException.getSyntaxError(builder.toString(), offset, "time, timestamp");
         }
         this.type = TypeInfo.getTypeInfo(valueType, -1, scale, null);
-        if (left.isConstant() && (right == null || right.isConstant())) {
+        if (arg.isConstant() && (timeZone == null || timeZone.isConstant())) {
             return ValueExpression.get(getValue(session));
         }
         return this;
+    }
+
+    @Override
+    public void setEvaluatable(TableFilter tableFilter, boolean b) {
+        arg.setEvaluatable(tableFilter, b);
+        if (timeZone != null) {
+            timeZone.setEvaluatable(tableFilter, b);
+        }
+    }
+
+    @Override
+    public TypeInfo getType() {
+        return type;
+    }
+
+    @Override
+    public void updateAggregate(Session session, int stage) {
+        arg.updateAggregate(session, stage);
+        if (timeZone != null) {
+            timeZone.updateAggregate(session, stage);
+        }
+    }
+
+    @Override
+    public boolean isEverything(ExpressionVisitor visitor) {
+        return arg.isEverything(visitor) && (timeZone == null || timeZone.isEverything(visitor));
+    }
+
+    @Override
+    public int getCost() {
+        int cost = arg.getCost() + 1;
+        if (timeZone != null) {
+            cost += timeZone.getCost();
+        }
+        return cost;
+    }
+
+    @Override
+    public int getSubexpressionCount() {
+        return timeZone != null ? 2 : 1;
+    }
+
+    @Override
+    public Expression getSubexpression(int index) {
+        if (index == 0) {
+            return arg;
+        }
+        if (index == 1 && timeZone != null) {
+            return timeZone;
+        }
+        throw new IndexOutOfBoundsException();
     }
 
 }

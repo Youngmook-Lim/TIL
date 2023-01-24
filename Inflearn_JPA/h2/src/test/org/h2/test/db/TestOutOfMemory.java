@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -16,10 +16,9 @@ import java.util.Random;
 import java.util.concurrent.atomic.AtomicReference;
 import org.h2.api.ErrorCode;
 import org.h2.mvstore.MVStore;
-import org.h2.mvstore.MVStoreException;
 import org.h2.store.fs.FilePath;
+import org.h2.store.fs.FilePathMem;
 import org.h2.store.fs.FileUtils;
-import org.h2.store.fs.mem.FilePathMem;
 import org.h2.test.TestBase;
 import org.h2.test.TestDb;
 import org.h2.util.Utils;
@@ -38,7 +37,7 @@ public class TestOutOfMemory extends TestDb {
      * @param a ignored
      */
     public static void main(String... a) throws Exception {
-        TestBase.createCaller().init().testFromMain();
+        TestBase.createCaller().init().test();
     }
 
     @Override
@@ -53,7 +52,7 @@ public class TestOutOfMemory extends TestDb {
     @Override
     public void test() throws Exception {
         try {
-            if (!config.ci) {
+            if (!config.travis) {
                 System.gc();
                 testMVStoreUsingInMemoryFileSystem();
                 System.gc();
@@ -71,10 +70,15 @@ public class TestOutOfMemory extends TestDb {
     private void testMVStoreUsingInMemoryFileSystem() {
         FilePath.register(new FilePathMem());
         String fileName = "memFS:" + getTestName();
-        AtomicReference<Throwable> exRef = new AtomicReference<>();
+        final AtomicReference<Throwable> exRef = new AtomicReference<>();
         MVStore store = new MVStore.Builder()
                 .fileName(fileName)
-                .backgroundExceptionHandler((t, e) -> exRef.compareAndSet(null, e))
+                .backgroundExceptionHandler(new Thread.UncaughtExceptionHandler() {
+                    @Override
+                    public void uncaughtException(Thread t, Throwable e) {
+                        exRef.compareAndSet(null, e);
+                    }
+                })
                 .open();
         try {
             Map<Integer, byte[]> map = store.openMap("test");
@@ -87,14 +91,14 @@ public class TestOutOfMemory extends TestDb {
                 }
                 Throwable throwable = exRef.get();
                 if(throwable instanceof OutOfMemoryError) throw (OutOfMemoryError)throwable;
-                if(throwable instanceof MVStoreException) throw (MVStoreException)throwable;
+                if(throwable instanceof IllegalStateException) throw (IllegalStateException)throwable;
                 fail();
-            } catch (OutOfMemoryError | MVStoreException e) {
+            } catch (OutOfMemoryError | IllegalStateException e) {
                 // expected
             }
             try {
                 store.close();
-            } catch (MVStoreException e) {
+            } catch (IllegalStateException e) {
                 // expected
             }
             store.closeImmediately();
@@ -115,10 +119,10 @@ public class TestOutOfMemory extends TestDb {
         try {
             Connection conn = DriverManager.getConnection(url);
             Statement stat = conn.createStatement();
-            long memoryFree = Utils.getMemoryFree();
+            int memoryFree = Utils.getMemoryFree();
             try {
                 stat.execute("create table test(id int, name varchar) as " +
-                        "select x, space(1000000+x) from system_range(1, 10000)");
+                        "select x, space(10000000+x) from system_range(1, 1000)");
                 fail();
             } catch (SQLException e) {
                 assertTrue("Unexpected error code: " + e.getErrorCode(),
@@ -149,7 +153,7 @@ public class TestOutOfMemory extends TestDb {
         }
     }
 
-    private static void recoverAfterOOM(long expectedFreeMemory) throws InterruptedException {
+    private static void recoverAfterOOM(int expectedFreeMemory) throws InterruptedException {
         for (int i = 0; i < 50; i++) {
             if (Utils.getMemoryFree() > expectedFreeMemory) {
                 break;
@@ -211,7 +215,8 @@ public class TestOutOfMemory extends TestDb {
         }
     }
 
-    public static final class MyChild extends TestDb.Child {
+    public static final class MyChild extends TestDb.Child
+    {
 
         /**
          * Run just this test.

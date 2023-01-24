@@ -1,11 +1,11 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.result;
 
-import org.h2.engine.Session;
+import org.h2.engine.SessionInterface;
 import org.h2.value.TypeInfo;
 import org.h2.value.Value;
 
@@ -41,7 +41,7 @@ public interface ResultInterface extends AutoCloseable {
      *
      * @return the row id
      */
-    long getRowId();
+    int getRowId();
 
     /**
      * Check if the current position is after last row.
@@ -63,7 +63,7 @@ public interface ResultInterface extends AutoCloseable {
      *
      * @return the number of rows
      */
-    long getRowCount();
+    int getRowCount();
 
     /**
      * Check if this result has more rows to fetch.
@@ -127,12 +127,12 @@ public interface ResultInterface extends AutoCloseable {
     TypeInfo getColumnType(int i);
 
     /**
-     * Check if this is an identity column.
+     * Check if this is an auto-increment column.
      *
      * @param i the column number (starting with 0)
-     * @return true for identity columns
+     * @return true for auto-increment columns
      */
-    boolean isIdentity(int i);
+    boolean isAutoIncrement(int i);
 
     /**
      * Check if this column is nullable.
@@ -177,6 +177,6 @@ public interface ResultInterface extends AutoCloseable {
      * @param targetSession the session of the copy
      * @return the copy if possible, or null if copying is not possible
      */
-    ResultInterface createShallowCopy(Session targetSession);
+    ResultInterface createShallowCopy(SessionInterface targetSession);
 
 }

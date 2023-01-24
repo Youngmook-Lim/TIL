@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -21,7 +21,7 @@ public class MathUtils {
     /**
      * The secure random object.
      */
-    static SecureRandom secureRandom;
+    static SecureRandom cachedSecureRandom;
 
     /**
      * True if the secure random object is seeded.
@@ -44,7 +44,7 @@ public class MathUtils {
      * @return the rounded value
      */
     public static int roundUpInt(int x, int blockSizePowerOf2) {
-        return (x + blockSizePowerOf2 - 1) & -blockSizePowerOf2;
+        return (x + blockSizePowerOf2 - 1) & (-blockSizePowerOf2);
     }
 
     /**
@@ -58,33 +58,36 @@ public class MathUtils {
      * @return the rounded value
      */
     public static long roundUpLong(long x, long blockSizePowerOf2) {
-        return (x + blockSizePowerOf2 - 1) & -blockSizePowerOf2;
+        return (x + blockSizePowerOf2 - 1) & (-blockSizePowerOf2);
     }
 
     private static synchronized SecureRandom getSecureRandom() {
-        if (secureRandom != null) {
-            return secureRandom;
+        if (cachedSecureRandom != null) {
+            return cachedSecureRandom;
         }
         // Workaround for SecureRandom problem as described in
-        // https://bugs.openjdk.java.net/browse/JDK-6202721
+        // http://bugs.sun.com/bugdatabase/view_bug.do?bug_id=6202721
         // Can not do that in a static initializer block, because
         // threads are not started until after the initializer block exits
         try {
-            secureRandom = SecureRandom.getInstance("SHA1PRNG");
+            cachedSecureRandom = SecureRandom.getInstance("SHA1PRNG");
             // On some systems, secureRandom.generateSeed() is very slow.
             // In this case it is initialized using our own seed implementation
             // and afterwards (in the thread) using the regular algorithm.
-            Runnable runnable = () -> {
-                try {
-                    SecureRandom sr = SecureRandom.getInstance("SHA1PRNG");
-                    byte[] seed = sr.generateSeed(20);
-                    synchronized (secureRandom) {
-                        secureRandom.setSeed(seed);
-                        seeded = true;
+            Runnable runnable = new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        SecureRandom sr = SecureRandom.getInstance("SHA1PRNG");
+                        byte[] seed = sr.generateSeed(20);
+                        synchronized (cachedSecureRandom) {
+                            cachedSecureRandom.setSeed(seed);
+                            seeded = true;
+                        }
+                    } catch (Exception e) {
+                        // NoSuchAlgorithmException
+                        warn("SecureRandom", e);
                     }
-                } catch (Exception e) {
-                    // NoSuchAlgorithmException
-                    warn("SecureRandom", e);
                 }
             };
 
@@ -104,8 +107,8 @@ public class MathUtils {
                 if (!seeded) {
                     byte[] seed = generateAlternativeSeed();
                     // this never reduces randomness
-                    synchronized (secureRandom) {
-                        secureRandom.setSeed(seed);
+                    synchronized (cachedSecureRandom) {
+                        cachedSecureRandom.setSeed(seed);
                     }
                 }
             } catch (SecurityException e) {
@@ -117,9 +120,9 @@ public class MathUtils {
         } catch (Exception e) {
             // NoSuchAlgorithmException
             warn("SecureRandom", e);
-            secureRandom = new SecureRandom();
+            cachedSecureRandom = new SecureRandom();
         }
-        return secureRandom;
+        return cachedSecureRandom;
     }
 
     /**
@@ -216,19 +219,27 @@ public class MathUtils {
      *
      * @param x the original value
      * @return the next power of two value
-     * @throws IllegalArgumentException if x &lt; 0 or x &gt; 0x40000000
+     * @throws IllegalArgumentException if x < 0 or x > 0x40000000
      */
     public static int nextPowerOf2(int x) throws IllegalArgumentException {
-        if (x + Integer.MIN_VALUE > (0x4000_0000 + Integer.MIN_VALUE)) {
+        if (x == 0) {
+            return 1;
+        } else if (x < 0 || x > 0x4000_0000 ) {
             throw new IllegalArgumentException("Argument out of range"
                     + " [0x0-0x40000000]. Argument was: " + x);
         }
-        return x <= 1 ? 1 : (-1 >>> Integer.numberOfLeadingZeros(x - 1)) + 1;
+        x--;
+        x |= x >> 1;
+        x |= x >> 2;
+        x |= x >> 4;
+        x |= x >> 8;
+        x |= x >> 16;
+        return ++x;
     }
 
     /**
      * Convert a long value to an int value. Values larger than the biggest int
-     * value are converted to the biggest int value, and values smaller than the
+     * value is converted to the biggest int value, and values smaller than the
      * smallest int value are converted to the smallest int value.
      *
      * @param l the value to convert
@@ -241,24 +252,6 @@ public class MathUtils {
             return Integer.MAX_VALUE;
         } else {
             return (int) l;
-        }
-    }
-
-    /**
-     * Convert an int value to a short value. Values larger than the biggest
-     * short value are converted to the biggest short value, and values smaller
-     * than the smallest short value are converted to the smallest short value.
-     *
-     * @param i the value to convert
-     * @return the converted short value
-     */
-    public static short convertIntToShort(int i) {
-        if (i <= Short.MIN_VALUE) {
-            return Short.MIN_VALUE;
-        } else if (i >= Short.MAX_VALUE) {
-            return Short.MAX_VALUE;
-        } else {
-            return (short) i;
         }
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2022 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -13,7 +13,7 @@ public final class GeometryUtils {
     /**
      * Converter output target.
      */
-    public abstract static class Target {
+    public static abstract class Target {
 
         public Target() {
         }
@@ -52,8 +52,7 @@ public final class GeometryUtils {
         }
 
         /**
-         * Invoked before writing a POLYGON. If polygon is empty, both
-         * parameters are 0.
+         * Invoked before writing a POLYGON.
          *
          * @param numInner
          *            number of inner polygons
@@ -282,6 +281,116 @@ public final class GeometryUtils {
     }
 
     /**
+     * Converter output target that calculates an envelope and determines the
+     * minimal dimension system.
+     */
+    public static final class EnvelopeAndDimensionSystemTarget extends Target {
+
+        /**
+         * Enables or disables the envelope calculation. Inner rings of polygons
+         * are not counted.
+         */
+        private boolean enabled;
+
+        /**
+         * Whether envelope was set.
+         */
+        private boolean set;
+
+        private double minX, maxX, minY, maxY;
+
+        private boolean hasZ;
+
+        private boolean hasM;
+
+        /**
+         * Creates a new envelope and dimension system calculation target.
+         */
+        public EnvelopeAndDimensionSystemTarget() {
+        }
+
+        @Override
+        protected void dimensionSystem(int dimensionSystem) {
+            if ((dimensionSystem & DIMENSION_SYSTEM_XYZ) != 0) {
+                hasZ = true;
+            }
+            if ((dimensionSystem & DIMENSION_SYSTEM_XYM) != 0) {
+                hasM = true;
+            }
+        }
+
+        @Override
+        protected void startPoint() {
+            enabled = true;
+        }
+
+        @Override
+        protected void startLineString(int numPoints) {
+            enabled = true;
+        }
+
+        @Override
+        protected void startPolygon(int numInner, int numPoints) {
+            enabled = true;
+        }
+
+        @Override
+        protected void startPolygonInner(int numInner) {
+            enabled = false;
+        }
+
+        @Override
+        protected void addCoordinate(double x, double y, double z, double m, int index, int total) {
+            if (!hasZ && !Double.isNaN(z)) {
+                hasZ = true;
+            }
+            if (!hasM && !Double.isNaN(m)) {
+                hasM = true;
+            }
+            // POINT EMPTY has NaNs
+            if (enabled && !Double.isNaN(x) && !Double.isNaN(y)) {
+                if (!set) {
+                    minX = maxX = x;
+                    minY = maxY = y;
+                    set = true;
+                } else {
+                    if (minX > x) {
+                        minX = x;
+                    }
+                    if (maxX < x) {
+                        maxX = x;
+                    }
+                    if (minY > y) {
+                        minY = y;
+                    }
+                    if (maxY < y) {
+                        maxY = y;
+                    }
+                }
+            }
+        }
+
+        /**
+         * Returns the envelope.
+         *
+         * @return the envelope, or null
+         */
+        public double[] getEnvelope() {
+            return set ? new double[] { minX, maxX, minY, maxY } : null;
+        }
+
+        /**
+         * Returns the minimal dimension system.
+         *
+         * @return the minimal dimension system
+         */
+        public int getDimensionSystem() {
+            return (hasZ ? DIMENSION_SYSTEM_XYZ : 0) | (hasM ? DIMENSION_SYSTEM_XYM : 0);
+        }
+
+    }
+
+    /**
      * POINT geometry type.
      */
     public static final int POINT = 1;
@@ -462,13 +571,12 @@ public final class GeometryUtils {
 
     /**
      * Throw exception if param is not finite value (ie. NaN/inf/etc)
-     *
-     * @param d
-     *            a double value
-     * @return the same double value
+     * @param d double value
+     * @return same double value
      */
     static double checkFinite(double d) {
-        if (!Double.isFinite(d)) {
+        // Do not push this negation down, it will break NaN rejection
+        if (!(Math.abs(d) <= Double.MAX_VALUE)) {
             throw new IllegalArgumentException();
         }
         return d;
