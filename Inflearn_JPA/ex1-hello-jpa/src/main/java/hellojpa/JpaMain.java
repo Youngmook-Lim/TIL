@@ -14,14 +14,39 @@ public class JpaMain {
         tx.begin();
 
         try {
+            Member member = new Member();
+//            member.setId("ID_A");
+            member.setUsername("A");
+            member.setRoleType(RoleType.ADMIN);
+//            em.persist(member);
+
+
+            Member member1 = new Member();
+            member1.setUsername("B");
+            Member member2 = new Member();
+            member2.setUsername("C");
+
+            System.out.println("============");
+            em.persist(member); // 1, 51
+            em.persist(member1); // MEM
+            em.persist(member2); // MEM
+            System.out.println(member.getId());
+            System.out.println(member1.getId());
+            System.out.println(member2.getId());
+            System.out.println("============");
+
+            // DQ SEQ = 1  |  1
+            // DQ SEQ = 51  |  2
+            // DQ SEQ = 51  |  3
+
 //            Member member = new Member(200L, "member200");
 //            em.persist(member);
 //            em.flush();
 
-            Member member = em.find(Member.class, 150L);
-            member.setName("AAAAA");
-
-            em.detach(member);
+//            Member member = em.find(Member.class, 150L);
+//            member.setName("AAAAA");
+//
+//            em.detach(member);
 
 //            Member member1 = new Member(150L, "A");
 //            Member member2 = new Member(160L, "B");
@@ -29,7 +54,6 @@ public class JpaMain {
 //            em.persist(member1);
 //            em.persist(member2);
 
-            System.out.println("============");
 
 //            //비영속
 //            Member member = new Member();
