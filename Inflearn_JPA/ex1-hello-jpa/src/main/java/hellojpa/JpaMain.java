@@ -14,26 +14,61 @@ public class JpaMain {
         tx.begin();
 
         try {
-            Member member = new Member();
+            //저장
+            Team team = new Team();
+            team.setName("TeamA");
+//            team.getMembers().add(member); // 이거 안됌
+            em.persist(team);
+
+            Member2 member = new Member2();
+            member.setUsername("member1");
+            // 한쪽만 해주라 (둘 중 하나만 정해라)
+//            member.changeTeam(team);
+            em.persist(member);
+
+//            team.getMembers().add(member); // 이거 안해도 되지만 해주는게 좋음
+            // 한쪽만 해준 것 (연관관계 편의 메소드)
+            team.addMember(member);
+
+            em.flush();
+            em.clear();
+
+            Member2 findMember = em.find(Member2.class, member.getId());
+//            Team findTeam = em.find(Team.class, findMember.getTeamId());
+//            Team findTeam = findMember.getTeam();
+//            System.out.println(findTeam.getName());
+
+            // member의 team 바꾸기
+//            Team newTeam = em.find(Team.class, 100L);
+//            findMember.setTeam(newTeam);
+
+//            List<Member2> members = findMember.getTeam().getMembers();
+//
+//            for (Member2 m : members) {
+//                System.out.println("m = " + m.getUsername());
+//            }
+
+            //////////////////////////////////////////////
+
+//            Member member = new Member();
 //            member.setId("ID_A");
-            member.setUsername("A");
-            member.setRoleType(RoleType.ADMIN);
-//            em.persist(member);
+//            member.setUsername("A");
+//            member.setRoleType(RoleType.ADMIN);
 
 
-            Member member1 = new Member();
-            member1.setUsername("B");
-            Member member2 = new Member();
-            member2.setUsername("C");
-
-            System.out.println("============");
-            em.persist(member); // 1, 51
-            em.persist(member1); // MEM
-            em.persist(member2); // MEM
-            System.out.println(member.getId());
-            System.out.println(member1.getId());
-            System.out.println(member2.getId());
-            System.out.println("============");
+//            Member member1 = new Member();
+//            member1.setUsername("B");
+//            Member member2 = new Member();
+//            member2.setUsername("C");
+//
+//            System.out.println("============");
+//            em.persist(member); // 1, 51
+//            em.persist(member1); // MEM
+//            em.persist(member2); // MEM
+//            System.out.println(member.getId());
+//            System.out.println(member1.getId());
+//            System.out.println(member2.getId());
+//            System.out.println("============");
 
             // DQ SEQ = 1  |  1
             // DQ SEQ = 51  |  2
