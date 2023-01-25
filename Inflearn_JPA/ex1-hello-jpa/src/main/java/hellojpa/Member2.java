@@ -13,12 +13,16 @@ public class Member2 {
     @Column(name = "USERNAME")
     private String username;
 
+    @ManyToOne
+    @JoinColumn(name = "TEAM_ID", insertable = false, updatable = false)
+    private Team team;
+
 //    @Column(name = "TEAM_ID")
 //    private Long teamId;
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "TEAM_ID")
-    private Team team;
+//    @ManyToOne(fetch = FetchType.LAZY)
+//    @JoinColumn(name = "TEAM_ID")
+//    private Team team;
 
     public Long getId() {
         return id;
@@ -36,13 +40,13 @@ public class Member2 {
         this.username = username;
     }
 
-    public Team getTeam() {
-        return team;
-    }
-
-    public void setTeam(Team team) {
-        this.team = team;
-    }
+//    public Team getTeam() {
+//        return team;
+//    }
+//
+//    public void setTeam(Team team) {
+//        this.team = team;
+//    }
 
     // 한쪽만 해주라
 //    public void changeTeam(Team team) {

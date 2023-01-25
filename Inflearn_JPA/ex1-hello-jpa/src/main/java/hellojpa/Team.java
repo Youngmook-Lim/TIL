@@ -13,7 +13,11 @@ public class Team {
     private Long id;
     private String name;
 
-    @OneToMany(mappedBy = "team")
+//    @OneToMany(mappedBy = "team")
+//    private List<Member2> members = new ArrayList<>();
+
+    @OneToMany
+    @JoinColumn(name = "TEAM_ID")
     private List<Member2> members = new ArrayList<>();
 
     public Long getId() {
@@ -40,8 +44,8 @@ public class Team {
         this.members = members;
     }
 
-    public void addMember(Member2 member) {
-        this.members.add(member);
-        member.setTeam(this);
-    }
+//    public void addMember(Member2 member) {
+//        this.members.add(member);
+//        member.setTeam(this);
+//    }
 }

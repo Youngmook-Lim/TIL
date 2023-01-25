@@ -14,26 +14,37 @@ public class JpaMain {
         tx.begin();
 
         try {
-            //저장
-            Team team = new Team();
-            team.setName("TeamA");
-//            team.getMembers().add(member); // 이거 안됌
-            em.persist(team);
-
             Member2 member = new Member2();
             member.setUsername("member1");
+
+            em.persist(member);
+
+            Team team = new Team();
+            team.setName("teamA");
+            team.getMembers().add(member);
+
+            em.persist(team);
+
+
+//            Team team = new Team();
+//            team.setName("TeamA");
+////            team.getMembers().add(member); // 이거 안됌
+//            em.persist(team);
+//
+//            Member2 member = new Member2();
+//            member.setUsername("member1");
             // 한쪽만 해주라 (둘 중 하나만 정해라)
 //            member.changeTeam(team);
-            em.persist(member);
+//            em.persist(member);
 
 //            team.getMembers().add(member); // 이거 안해도 되지만 해주는게 좋음
             // 한쪽만 해준 것 (연관관계 편의 메소드)
-            team.addMember(member);
-
-            em.flush();
-            em.clear();
-
-            Member2 findMember = em.find(Member2.class, member.getId());
+//            team.addMember(member);
+//
+//            em.flush();
+//            em.clear();
+//
+//            Member2 findMember = em.find(Member2.class, member.getId());
 //            Team findTeam = em.find(Team.class, findMember.getTeamId());
 //            Team findTeam = findMember.getTeam();
 //            System.out.println(findTeam.getName());
