@@ -35,16 +35,6 @@
 			path = Memorize;
 			sourceTree = "<group>";
 		};
-		C985B2352D29823000A88114 /* MemorizeTests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = MemorizeTests;
-			sourceTree = "<group>";
-		};
-		C985B23F2D29823000A88114 /* MemorizeUITests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = MemorizeUITests;
-			sourceTree = "<group>";
-		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -76,8 +66,6 @@
 			isa = PBXGroup;
 			children = (
 				C985B2242D29822E00A88114 /* Memorize */,
-				C985B2352D29823000A88114 /* MemorizeTests */,
-				C985B23F2D29823000A88114 /* MemorizeUITests */,
 				C985B2232D29822E00A88114 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -130,9 +118,6 @@
 			dependencies = (
 				C985B2342D29823000A88114 /* PBXTargetDependency */,
 			);
-			fileSystemSynchronizedGroups = (
-				C985B2352D29823000A88114 /* MemorizeTests */,
-			);
 			name = MemorizeTests;
 			packageProductDependencies = (
 			);
@@ -152,9 +137,6 @@
 			);
 			dependencies = (
 				C985B23E2D29823000A88114 /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				C985B23F2D29823000A88114 /* MemorizeUITests */,
 			);
 			name = MemorizeUITests;
 			packageProductDependencies = (
